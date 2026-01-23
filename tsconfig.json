@@ -6,12 +6,19 @@
     },
     {
       "path": "./tsconfig.node.json"
+    },
+    {
+      "path": "./tsconfig.server.json"
     }
   ],
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    "types": ["node"],
+    "moduleResolution": "nodenext",
+    "module": "nodenext",
+    "target": "esnext",
   }
 }
