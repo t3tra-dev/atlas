@@ -1,5 +1,5 @@
 import { AppSidebar } from "@/components/app-sidebar"
-import { DocumentPane } from "@/components/document-pane"
+import { DocumentPane } from "@/components/document/pane"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import type { ReactNode } from "react"
 

@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import { DocumentEditor } from "./document-editor"
+import { DocumentEditor } from "./editor"
 import type { ReactNode } from "react"
 
 export function DocumentPane({
