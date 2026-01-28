@@ -24,6 +24,13 @@ import {
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
+import { createDocumentSdk } from "@/components/document/sdk";
+import type { NodeTypeDefinition } from "@/components/document/sdk";
+import { createPluginHost } from "@/components/document/plugin-system";
+import { BuiltinPlugin } from "@/plugins/builtin";
+
+import type { MenuEntry } from "@/plugin";
+
 import type {
   Camera,
   DocEdge,
@@ -31,12 +38,72 @@ import type {
   DocumentModel,
   DragState,
   EdgeShape,
-  EllipseNode,
-  RectNode,
   Selection,
   Tool,
 } from "@/components/document/model";
 import { STORAGE_KEY } from "@/components/document/model";
+
+function isTextInputTarget(target: EventTarget | null) {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName?.toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+  if (el.isContentEditable) return true;
+  return false;
+}
+
+function normalizeHotkeyKey(k: string) {
+  const key = k.toLowerCase();
+  if (key === " ") return "space";
+  if (key === "esc") return "escape";
+  return key;
+}
+
+function matchKeybinding(
+  keys: string,
+  e: KeyboardEvent,
+  isMac: boolean,
+): boolean {
+  const parts = keys
+    .toLowerCase()
+    .split("+")
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const wants = new Set(parts);
+  const keyPart = parts.find(
+    (p) =>
+      !["mod", "meta", "cmd", "ctrl", "shift", "alt", "option"].includes(p),
+  );
+  if (!keyPart) return false;
+
+  const wantShift = wants.has("shift");
+  const wantAlt = wants.has("alt") || wants.has("option");
+  const wantCtrl = wants.has("ctrl");
+  const wantMeta = wants.has("meta") || wants.has("cmd");
+  const wantMod = wants.has("mod");
+
+  const modOk = !wantMod || (isMac ? e.metaKey : e.ctrlKey);
+  if (!modOk) return false;
+
+  if (wantShift !== e.shiftKey) return false;
+  if (wantAlt !== e.altKey) return false;
+
+  if (wantCtrl && !e.ctrlKey) return false;
+  if (wantMeta && !e.metaKey) return false;
+
+  const wantsAnyCtrlMeta = wantCtrl || wantMeta || wantMod;
+  if (!wantsAnyCtrlMeta && (e.ctrlKey || e.metaKey)) return false;
+
+  return normalizeHotkeyKey(e.key) === normalizeHotkeyKey(keyPart);
+}
+
+function isMacPlatform() {
+  return (
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+  );
+}
 
 function newId(prefix: string) {
   const random = typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -236,23 +303,23 @@ function safeParseDoc(
         : null;
       const r = propsObj?.radius as unknown;
       if (typeof r === "number") {
-        const rect = rawNode as RectNode;
+        const rect = rawNode as DocNode;
         nextNodes[nodeId] = {
           ...rect,
           props: {
-            ...rect.props,
+            ...(rect.props as Record<string, unknown>),
             radius: { tl: r, tr: r, br: r, bl: r },
           },
-        };
+        } as DocNode;
       } else if (!r || typeof r !== "object") {
-        const rect = rawNode as RectNode;
+        const rect = rawNode as DocNode;
         nextNodes[nodeId] = {
           ...rect,
           props: {
-            ...rect.props,
+            ...(rect.props as Record<string, unknown>),
             radius: { tl: 0, tr: 0, br: 0, bl: 0 },
           },
-        };
+        } as DocNode;
       }
     }
     migrated.nodes = nextNodes;
@@ -312,6 +379,7 @@ function computeEdgePath(edge: DocEdge, fromNode: DocNode, toNode: DocNode) {
 
 function NodeView({
   node,
+  nodeDef,
   selected,
   scale,
   onPointerDown,
@@ -319,6 +387,7 @@ function NodeView({
   onDoubleClick,
 }: {
   node: DocNode;
+  nodeDef: NodeTypeDefinition;
   selected: boolean;
   scale: number;
   onPointerDown: (e: React.PointerEvent) => void;
@@ -339,115 +408,31 @@ function NodeView({
     ? "ring-2 ring-ring ring-offset-2 ring-offset-background"
     : "";
 
-  if (node.type === "rect") {
-    const p = node.props;
-    return (
-      <div
-        role="group"
-        aria-label="rectangle"
-        className={cn("select-none", outlineClass)}
-        style={{
-          ...baseStyle,
-          borderRadius: `${p.radius.tl * scale}px ${p.radius.tr * scale}px ${
-            p.radius.br * scale
-          }px ${p.radius.bl * scale}px`,
-          background: p.fill,
-          border: `${p.strokeWidth * scale}px solid ${p.stroke}`,
-        }}
-        onPointerDown={onPointerDown}
-        onDoubleClick={onDoubleClick}
-      >
-        {selected && (
-          <ResizeHandle
-            scale={scale}
-            onPointerDown={onResizeHandlePointerDown}
-          />
-        )}
-      </div>
-    );
-  }
+  const rendered = nodeDef.render({
+    node,
+    selected,
+    scale,
+    cn,
+  });
 
-  if (node.type === "ellipse") {
-    const p = node.props;
-    return (
-      <div
-        role="group"
-        aria-label="ellipse"
-        className={cn("select-none", outlineClass)}
-        style={{
-          ...baseStyle,
-          borderRadius: "50%",
-          background: p.fill,
-          border: `${p.strokeWidth * scale}px solid ${p.stroke}`,
-        }}
-        onPointerDown={onPointerDown}
-        onDoubleClick={onDoubleClick}
-      >
-        {selected && (
-          <ResizeHandle
-            scale={scale}
-            onPointerDown={onResizeHandlePointerDown}
-          />
-        )}
-      </div>
-    );
-  }
-
-  if (node.type === "image") {
-    const p = node.props;
-    return (
-      <div
-        role="group"
-        aria-label="image"
-        className={cn("select-none overflow-hidden bg-muted", outlineClass)}
-        style={{
-          ...baseStyle,
-          borderRadius: p.borderRadius * scale,
-        }}
-        onPointerDown={onPointerDown}
-        onDoubleClick={onDoubleClick}
-      >
-        <img
-          src={p.src}
-          alt=""
-          className="h-full w-full"
-          style={{ objectFit: p.fit }}
-          draggable={false}
-        />
-        {selected && (
-          <ResizeHandle
-            scale={scale}
-            onPointerDown={onResizeHandlePointerDown}
-          />
-        )}
-      </div>
-    );
-  }
-
-  // text
-  const p = node.props;
   return (
     <div
       role="group"
-      aria-label="text"
-      className={cn(
-        "select-none whitespace-pre-wrap bg-transparent",
-        outlineClass,
-      )}
+      aria-label={rendered.ariaLabel ?? node.type}
+      className={cn(rendered.className, outlineClass)}
       style={{
         ...baseStyle,
-        padding: 10 * scale,
-        color: p.color,
-        fontSize: p.fontSize * scale,
-        lineHeight: 1.25,
-        textAlign: p.align,
+        ...(rendered.style ?? null),
       }}
       onPointerDown={onPointerDown}
       onDoubleClick={onDoubleClick}
     >
-      {p.text}
+      {rendered.children}
       {selected && (
-        <ResizeHandle scale={scale} onPointerDown={onResizeHandlePointerDown} />
+        <ResizeHandle
+          scale={scale}
+          onPointerDown={onResizeHandlePointerDown}
+        />
       )}
     </div>
   );
@@ -577,6 +562,110 @@ export function DocumentEditor({ className }: { className?: string }) {
   >(null);
   const [jsonDraft, setJsonDraft] = React.useState<string>("");
 
+  const viewportRect = React.useCallback(
+    () => viewportRef.current?.getBoundingClientRect() ?? null,
+    [],
+  );
+
+  const zoomToAtClient = React.useCallback(
+    (nextScale: number, clientX?: number, clientY?: number) => {
+      const rect = viewportRect();
+      const clamped = clamp(Number(nextScale.toFixed(3)), 0.2, 3);
+      if (!rect) {
+        setCamera((c) => ({ ...c, scale: clamped }));
+        return;
+      }
+
+      const sx = (clientX ?? rect.left + rect.width / 2) - rect.left;
+      const sy = (clientY ?? rect.top + rect.height / 2) - rect.top;
+      const worldX = camera.x + sx / camera.scale;
+      const worldY = camera.y + sy / camera.scale;
+
+      setCamera({
+        x: worldX - sx / clamped,
+        y: worldY - sy / clamped,
+        scale: clamped,
+      });
+    },
+    [camera.scale, camera.x, camera.y, viewportRect],
+  );
+
+  const zoomToCentered = React.useCallback(
+    (nextScale: number) => {
+      const clamped = clamp(Number(nextScale.toFixed(3)), 0.2, 3);
+
+      const sx = viewportSize.width / 2;
+      const sy = viewportSize.height / 2;
+      const worldX = camera.x + sx / camera.scale;
+      const worldY = camera.y + sy / camera.scale;
+
+      setCamera({
+        x: worldX - sx / clamped,
+        y: worldY - sy / clamped,
+        scale: clamped,
+      });
+    },
+    [camera.scale, camera.x, camera.y, viewportSize.height, viewportSize.width],
+  );
+
+  const openJsonSheet = React.useCallback(
+    (mode: "export" | "import") => {
+      setJsonDraft(JSON.stringify(doc, null, 2));
+      setJsonSheet({ mode, error: null });
+    },
+    [doc],
+  );
+
+  const sdk = React.useMemo(
+    () =>
+      createDocumentSdk({
+        ui: { openJsonSheet },
+        doc: {
+          get: () => doc,
+          set: (next) => setDoc(next),
+          update: (updater) => setDoc((prev) => updater(prev)),
+        },
+        selection: {
+          get: () => selection,
+          set: (next) => setSelection(next),
+          clear: () => setSelection({ kind: "none" }),
+        },
+        tool: {
+          get: () => tool,
+          set: (next) => setTool(next),
+        },
+        camera: {
+          get: () => camera,
+          set: (next) =>
+            setCamera((prev) => typeof next === "function" ? next(prev) : next),
+        },
+        viewport: {
+          zoomTo: (nextScale) => zoomToCentered(nextScale),
+          zoomBy: (delta) => zoomToCentered(camera.scale + delta),
+        },
+      }),
+    [camera, doc, openJsonSheet, selection, tool, zoomToCentered],
+  );
+
+  const pluginHost = React.useMemo(
+    () => createPluginHost([BuiltinPlugin], { sdk }),
+    [sdk],
+  );
+  const nodeRegistry = pluginHost.nodeRegistry;
+  const addMenuEntries = pluginHost.menus.add;
+  const fileMenuEntries = pluginHost.menus.file;
+  const editMenuEntries = pluginHost.menus.edit;
+  const viewMenuEntries = pluginHost.menus.view;
+  const keybindings = pluginHost.keybindings;
+  const executeCommand = pluginHost.commands.execute;
+
+  const keybindingsRef = React.useRef(keybindings);
+  const executeCommandRef = React.useRef(executeCommand);
+  React.useEffect(() => {
+    keybindingsRef.current = keybindings;
+    executeCommandRef.current = executeCommand;
+  }, [executeCommand, keybindings]);
+
   const selectedNodeId = selection.kind === "node" ? selection.id : null;
   const selectedEdgeId = selection.kind === "edge" ? selection.id : null;
 
@@ -599,59 +688,14 @@ export function DocumentEditor({ className }: { className?: string }) {
         setSpaceDown(true);
       }
 
-      if (e.key === "Escape") {
-        setTool({ kind: "select" });
-        setSelection({ kind: "none" });
+      const isTyping = isTextInputTarget(e.target);
+      const isMac = isMacPlatform();
+      for (const kb of keybindingsRef.current) {
+        if (isTyping && !kb.allowInTextInput) continue;
+        if (!matchKeybinding(kb.keys, e, isMac)) continue;
+        if (kb.preventDefault ?? true) e.preventDefault();
+        executeCommandRef.current(kb.command);
         return;
-      }
-
-      if (e.key === "Backspace" || e.key === "Delete") {
-        if (selection.kind === "node") {
-          const id = selection.id;
-          setDoc((d) => {
-            const nextNodes = { ...d.nodes };
-            delete nextNodes[id];
-
-            const nextEdges: Record<string, DocEdge> = {};
-            const nextEdgeOrder: string[] = [];
-            for (const edgeId of d.edgeOrder) {
-              const edge = d.edges[edgeId];
-              if (!edge) continue;
-              if (edge.from === id || edge.to === id) continue;
-              nextEdges[edgeId] = edge;
-              nextEdgeOrder.push(edgeId);
-            }
-
-            return {
-              ...d,
-              nodes: nextNodes,
-              nodeOrder: d.nodeOrder.filter((x) => x !== id),
-              edges: nextEdges,
-              edgeOrder: nextEdgeOrder,
-            };
-          });
-          setSelection({ kind: "none" });
-        }
-
-        if (selection.kind === "edge") {
-          const edgeId = selection.id;
-          setDoc((d) => {
-            const nextEdges = { ...d.edges };
-            delete nextEdges[edgeId];
-            return {
-              ...d,
-              edges: nextEdges,
-              edgeOrder: d.edgeOrder.filter((x) => x !== edgeId),
-            };
-          });
-          setSelection({ kind: "none" });
-        }
-      }
-
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        setJsonDraft(JSON.stringify(doc, null, 2));
-        setJsonSheet({ mode: "export", error: null });
       }
     };
 
@@ -667,12 +711,7 @@ export function DocumentEditor({ className }: { className?: string }) {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [doc, selection]);
-
-  const viewportRect = React.useCallback(
-    () => viewportRef.current?.getBoundingClientRect() ?? null,
-    [],
-  );
+  }, []);
 
   const svgViewBox = React.useMemo(() => {
     const w = viewportSize.width / camera.scale;
@@ -845,8 +884,11 @@ export function DocumentEditor({ className }: { className?: string }) {
 
         const lock = (e as PointerEvent).shiftKey;
         const size = lock ? Math.max(absW, absH) : undefined;
-        const w = clamp(lock ? size! : absW, 1, 3200);
-        const h = clamp(lock ? size! : absH, 1, 3200);
+
+        const def = nodeRegistry.get(drag.nodeType);
+        const min = def?.placement?.minSize ?? { w: 1, h: 1 };
+        const w = clamp(lock ? size! : absW, min.w, 3200);
+        const h = clamp(lock ? size! : absH, min.h, 3200);
 
         const x = rawW < 0 ? drag.startWorldX - w : drag.startWorldX;
         const y = rawH < 0 ? drag.startWorldY - h : drag.startWorldY;
@@ -889,9 +931,8 @@ export function DocumentEditor({ className }: { className?: string }) {
             const node = d.nodes[drag.nodeId];
             if (!node) return d;
 
-            const defaults = drag.nodeType === "rect"
-              ? { w: 240, h: 140 }
-              : { w: 180, h: 140 };
+            const def = nodeRegistry.get(drag.nodeType);
+            const defaults = def?.placement?.defaultSize ?? { w: 200, h: 140 };
 
             return {
               ...d,
@@ -923,7 +964,7 @@ export function DocumentEditor({ className }: { className?: string }) {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [camera.scale, drag]);
+  }, [camera.scale, drag, nodeRegistry]);
 
   const onCanvasPointerDown = React.useCallback(
     (e: React.PointerEvent) => {
@@ -945,64 +986,13 @@ export function DocumentEditor({ className }: { className?: string }) {
         const point = toDocPoint(e, viewportRef.current, camera);
         const id = newId("node");
 
-        const node: DocNode = tool.nodeType === "rect"
-          ? {
-            id,
-            type: "rect",
-            x: point.x,
-            y: point.y,
-            w: 1,
-            h: 1,
-            props: {
-              fill: "rgba(99, 102, 241, 0.10)",
-              stroke: "rgba(99, 102, 241, 0.55)",
-              strokeWidth: 2,
-              radius: { tl: 14, tr: 14, br: 14, bl: 14 },
-            },
-          }
-          : tool.nodeType === "ellipse"
-          ? {
-            id,
-            type: "ellipse",
-            x: point.x,
-            y: point.y,
-            w: 1,
-            h: 1,
-            props: {
-              fill: "rgba(16, 185, 129, 0.10)",
-              stroke: "rgba(16, 185, 129, 0.55)",
-              strokeWidth: 2,
-            },
-          }
-          : tool.nodeType === "image"
-          ? {
-            id,
-            type: "image",
-            x: point.x - 160,
-            y: point.y - 110,
-            w: 320,
-            h: 220,
-            props: {
-              src:
-                "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&auto=format&fit=crop",
-              fit: "cover",
-              borderRadius: 14,
-            },
-          }
-          : {
-            id,
-            type: "text",
-            x: point.x - 140,
-            y: point.y - 45,
-            w: 280,
-            h: 90,
-            props: {
-              text: "テキスト",
-              fontSize: 18,
-              color: "var(--foreground)",
-              align: "left",
-            },
-          };
+        const nodeDef = nodeRegistry.get(tool.nodeType);
+        if (!nodeDef) {
+          setTool({ kind: "select" });
+          return;
+        }
+
+        const node: DocNode = nodeDef.create({ id, x: point.x, y: point.y });
 
         setDoc((d) => ({
           ...d,
@@ -1011,11 +1001,11 @@ export function DocumentEditor({ className }: { className?: string }) {
         }));
         setSelection({ kind: "node", id });
 
-        if (tool.nodeType === "rect" || tool.nodeType === "ellipse") {
+        if (nodeDef.placement?.kind === "drag") {
           setDrag({
             kind: "drawShape",
             nodeId: id,
-            nodeType: tool.nodeType,
+            nodeType: node.type,
             pointerId: e.pointerId,
             startWorldX: point.x,
             startWorldY: point.y,
@@ -1028,7 +1018,7 @@ export function DocumentEditor({ className }: { className?: string }) {
         setTool({ kind: "select" });
       }
     },
-    [beginPan, camera, spaceDown, tool],
+    [beginPan, camera, nodeRegistry, spaceDown, tool],
   );
 
   const onNodeClick = React.useCallback(
@@ -1083,32 +1073,26 @@ export function DocumentEditor({ className }: { className?: string }) {
       const node = doc.nodes[nodeId];
       if (!node) return;
 
-      if (node.type === "text") {
-        const next = window.prompt("テキストを編集", node.props.text);
-        if (next == null) return;
-        setDoc((d) => ({
-          ...d,
-          nodes: {
-            ...d.nodes,
-            [nodeId]: { ...node, props: { ...node.props, text: next } },
-          },
-        }));
-        return;
-      }
+      const nodeDef = nodeRegistry.get(node.type);
+      if (!nodeDef?.onDoubleClick) return;
 
-      if (node.type === "image") {
-        const next = window.prompt("画像URLを編集", node.props.src);
-        if (next == null) return;
-        setDoc((d) => ({
-          ...d,
-          nodes: {
-            ...d.nodes,
-            [nodeId]: { ...node, props: { ...node.props, src: next } },
-          },
-        }));
-      }
+      nodeDef.onDoubleClick({
+        node: node as never,
+        updateNode: (updater) =>
+          setDoc((d) => {
+            const cur = d.nodes[nodeId];
+            if (!cur) return d;
+            return {
+              ...d,
+              nodes: {
+                ...d.nodes,
+                [nodeId]: updater(cur as never) as DocNode,
+              },
+            };
+          }),
+      });
     },
-    [doc.nodes],
+    [doc.nodes, nodeRegistry],
   );
 
   const docJson = React.useMemo(() => JSON.stringify(doc, null, 2), [doc]);
@@ -1195,27 +1179,47 @@ export function DocumentEditor({ className }: { className?: string }) {
     }
   }, [selection]);
 
-  const zoomTo = React.useCallback(
-    (nextScale: number, clientX?: number, clientY?: number) => {
-      const rect = viewportRect();
-      const clamped = clamp(Number(nextScale.toFixed(3)), 0.2, 3);
-      if (!rect) {
-        setCamera((c) => ({ ...c, scale: clamped }));
-        return;
-      }
+  const renderMenuEntries = React.useCallback(
+    function renderMenuEntries(entries: Array<MenuEntry>, keyPrefix: string) {
+      return entries.map((entry, i) => {
+        if (entry.kind === "separator") {
+          return <MenubarSeparator key={`${keyPrefix}-sep-${i}`} />;
+        }
 
-      const sx = (clientX ?? rect.left + rect.width / 2) - rect.left;
-      const sy = (clientY ?? rect.top + rect.height / 2) - rect.top;
-      const worldX = camera.x + sx / camera.scale;
-      const worldY = camera.y + sy / camera.scale;
+        if (entry.kind === "submenu") {
+          const key = entry.id ?? `${keyPrefix}-submenu-${i}`;
+          return (
+            <MenubarSub key={key}>
+              <MenubarSubTrigger disabled={entry.disabled}>
+                {entry.label}
+              </MenubarSubTrigger>
+              <MenubarSubContent>
+                {renderMenuEntries(entry.entries, `${keyPrefix}-${key}`)}
+              </MenubarSubContent>
+            </MenubarSub>
+          );
+        }
 
-      setCamera({
-        x: worldX - sx / clamped,
-        y: worldY - sy / clamped,
-        scale: clamped,
+        const key = entry.id ?? `${keyPrefix}-item-${i}`;
+        return (
+          <MenubarItem
+            key={key}
+            onSelect={() => {
+              if (entry.onSelect) return entry.onSelect();
+              if (entry.command) return executeCommand(entry.command);
+            }}
+            variant={entry.variant ?? "default"}
+            disabled={entry.disabled}
+          >
+            {entry.label}
+            {entry.shortcut
+              ? <MenubarShortcut>{entry.shortcut}</MenubarShortcut>
+              : null}
+          </MenubarItem>
+        );
       });
     },
-    [camera.scale, camera.x, camera.y, viewportRect],
+    [executeCommand],
   );
 
   return (
@@ -1227,139 +1231,16 @@ export function DocumentEditor({ className }: { className?: string }) {
           <MenubarMenu>
             <MenubarTrigger>追加</MenubarTrigger>
             <MenubarContent>
-              <MenubarItem
-                onSelect={() => {
-                  setTool({ kind: "add", nodeType: "text" });
-                }}
-              >
-                テキスト
-              </MenubarItem>
-              <MenubarSub>
-                <MenubarSubTrigger>図形</MenubarSubTrigger>
-                <MenubarSubContent>
-                  <MenubarItem
-                    onSelect={() => setTool({ kind: "add", nodeType: "rect" })}
-                  >
-                    四角形
-                  </MenubarItem>
-                  <MenubarItem
-                    onSelect={() =>
-                      setTool({ kind: "add", nodeType: "ellipse" })}
-                  >
-                    円
-                  </MenubarItem>
-
-                  <MenubarSeparator />
-
-                  <MenubarSub>
-                    <MenubarSubTrigger>線分</MenubarSubTrigger>
-                    <MenubarSubContent>
-                      <MenubarSub>
-                        <MenubarSubTrigger>直線</MenubarSubTrigger>
-                        <MenubarSubContent>
-                          <MenubarItem
-                            onSelect={() =>
-                              setTool({
-                                kind: "connect",
-                                edge: { shape: "line", arrow: "none" },
-                                fromId: null,
-                              })}
-                          >
-                            矢印なし
-                          </MenubarItem>
-                          <MenubarItem
-                            onSelect={() =>
-                              setTool({
-                                kind: "connect",
-                                edge: { shape: "line", arrow: "end" },
-                                fromId: null,
-                              })}
-                          >
-                            方矢印
-                          </MenubarItem>
-                          <MenubarItem
-                            onSelect={() =>
-                              setTool({
-                                kind: "connect",
-                                edge: { shape: "line", arrow: "both" },
-                                fromId: null,
-                              })}
-                          >
-                            両矢印
-                          </MenubarItem>
-                        </MenubarSubContent>
-                      </MenubarSub>
-
-                      <MenubarSub>
-                        <MenubarSubTrigger>曲線</MenubarSubTrigger>
-                        <MenubarSubContent>
-                          <MenubarItem
-                            onSelect={() =>
-                              setTool({
-                                kind: "connect",
-                                edge: { shape: "curve", arrow: "none" },
-                                fromId: null,
-                              })}
-                          >
-                            矢印なし
-                          </MenubarItem>
-                          <MenubarItem
-                            onSelect={() =>
-                              setTool({
-                                kind: "connect",
-                                edge: { shape: "curve", arrow: "end" },
-                                fromId: null,
-                              })}
-                          >
-                            方矢印
-                          </MenubarItem>
-                          <MenubarItem
-                            onSelect={() =>
-                              setTool({
-                                kind: "connect",
-                                edge: { shape: "curve", arrow: "both" },
-                                fromId: null,
-                              })}
-                          >
-                            両矢印
-                          </MenubarItem>
-                        </MenubarSubContent>
-                      </MenubarSub>
-                    </MenubarSubContent>
-                  </MenubarSub>
-                </MenubarSubContent>
-              </MenubarSub>
-              <MenubarItem
-                onSelect={() => {
-                  setTool({ kind: "add", nodeType: "image" });
-                }}
-              >
-                画像
-              </MenubarItem>
+              {renderMenuEntries(addMenuEntries, "add")}
             </MenubarContent>
           </MenubarMenu>
 
           <MenubarMenu>
             <MenubarTrigger>ファイル</MenubarTrigger>
             <MenubarContent>
-              <MenubarItem
-                onSelect={() => {
-                  setJsonDraft(JSON.stringify(doc, null, 2));
-                  setJsonSheet({ mode: "export", error: null });
-                }}
-              >
-                JSON書き出し
-                <MenubarShortcut>⌘S</MenubarShortcut>
-              </MenubarItem>
-              <MenubarItem
-                onSelect={() => {
-                  setJsonDraft(JSON.stringify(doc, null, 2));
-                  setJsonSheet({ mode: "import", error: null });
-                }}
-              >
-                JSON読み込み
-              </MenubarItem>
-              <MenubarSeparator />
+              {renderMenuEntries(fileMenuEntries, "file")}
+
+              {fileMenuEntries.length ? <MenubarSeparator /> : null}
               <MenubarItem
                 variant="destructive"
                 onSelect={() => {
@@ -1377,57 +1258,14 @@ export function DocumentEditor({ className }: { className?: string }) {
           <MenubarMenu>
             <MenubarTrigger>編集</MenubarTrigger>
             <MenubarContent>
-              <MenubarItem
-                onSelect={() => {
-                  deleteSelected();
-                }}
-                variant="destructive"
-              >
-                削除
-                <MenubarShortcut>⌫</MenubarShortcut>
-              </MenubarItem>
-              <MenubarSeparator />
-              <MenubarItem
-                onSelect={() => {
-                  setSelection({ kind: "none" });
-                  setTool({ kind: "select" });
-                }}
-              >
-                選択解除
-                <MenubarShortcut>Esc</MenubarShortcut>
-              </MenubarItem>
+              {renderMenuEntries(editMenuEntries, "edit")}
             </MenubarContent>
           </MenubarMenu>
 
           <MenubarMenu>
             <MenubarTrigger>表示</MenubarTrigger>
             <MenubarContent>
-              <MenubarItem onSelect={() => zoomTo(camera.scale + 0.1)}>
-                ズームイン
-              </MenubarItem>
-              <MenubarItem onSelect={() => zoomTo(camera.scale - 0.1)}>
-                ズームアウト
-              </MenubarItem>
-              <MenubarItem
-                onSelect={() => setCamera((c) => ({ ...c, scale: 1 }))}
-              >
-                等倍
-              </MenubarItem>
-              <MenubarSeparator />
-              <MenubarItem
-                onSelect={() =>
-                  setDoc((d) => ({
-                    ...d,
-                    canvas: {
-                      ...d.canvas,
-                      background: d.canvas.background === "grid"
-                        ? "plain"
-                        : "grid",
-                    },
-                  }))}
-              >
-                グリッド切替
-              </MenubarItem>
+              {renderMenuEntries(viewMenuEntries, "view")}
             </MenubarContent>
           </MenubarMenu>
         </Menubar>
@@ -1453,7 +1291,7 @@ export function DocumentEditor({ className }: { className?: string }) {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => zoomTo(camera.scale - 0.1)}
+              onClick={() => zoomToCentered(camera.scale - 0.1)}
             >
               −
             </Button>
@@ -1463,7 +1301,7 @@ export function DocumentEditor({ className }: { className?: string }) {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => zoomTo(camera.scale + 0.1)}
+              onClick={() => zoomToCentered(camera.scale + 0.1)}
             >
               ＋
             </Button>
@@ -1488,7 +1326,7 @@ export function DocumentEditor({ className }: { className?: string }) {
             const delta = e.deltaY;
             // Smooth & slower zoom: exponential mapping
             const zoomFactor = Math.exp(-delta * 0.0012);
-            zoomTo(camera.scale * zoomFactor, e.clientX, e.clientY);
+            zoomToAtClient(camera.scale * zoomFactor, e.clientX, e.clientY);
           }}
           onPointerMove={(e) => {
             if (tool.kind !== "connect" || !tool.fromId) return;
@@ -1622,6 +1460,8 @@ export function DocumentEditor({ className }: { className?: string }) {
             {doc.nodeOrder.map((nodeId) => {
               const node = doc.nodes[nodeId];
               if (!node) return null;
+              const nodeDef = nodeRegistry.get(node.type);
+              if (!nodeDef) return null;
               const selected = selectedNodeId === nodeId;
 
               const screenX = (node.x - camera.x) * camera.scale;
@@ -1639,6 +1479,7 @@ export function DocumentEditor({ className }: { className?: string }) {
                     w: screenW / camera.scale,
                     h: screenH / camera.scale,
                   }}
+                  nodeDef={nodeDef}
                   selected={selected}
                   scale={camera.scale}
                   onPointerDown={(e) => {
@@ -1769,239 +1610,25 @@ export function DocumentEditor({ className }: { className?: string }) {
                   </InputGroup>
                 </div>
 
-                {selectedNode.type === "ellipse"
-                  ? (
-                    <div className="grid grid-cols-2 gap-2">
-                      <InputGroup label="半径X">
-                        <Input
-                          inputMode="numeric"
-                          value={String(Math.round(selectedNode.w / 2))}
-                          onChange={(e) => {
-                            const nextRx = Number(e.target.value);
-                            if (!Number.isFinite(nextRx)) return;
-                            setDoc((d) => {
-                              const n = d.nodes[selectedNode.id] as
-                                | EllipseNode
-                                | undefined;
-                              if (!n || n.type !== "ellipse") return d;
-                              const centerX = n.x + n.w / 2;
-                              const newW = clamp(nextRx * 2, 24, 3200);
-                              return {
-                                ...d,
-                                nodes: {
-                                  ...d.nodes,
-                                  [n.id]: {
-                                    ...n,
-                                    w: newW,
-                                    x: centerX - newW / 2,
-                                  },
-                                },
-                              };
-                            });
-                          }}
-                        />
-                      </InputGroup>
-                      <InputGroup label="半径Y">
-                        <Input
-                          inputMode="numeric"
-                          value={String(Math.round(selectedNode.h / 2))}
-                          onChange={(e) => {
-                            const nextRy = Number(e.target.value);
-                            if (!Number.isFinite(nextRy)) return;
-                            setDoc((d) => {
-                              const n = d.nodes[selectedNode.id] as
-                                | EllipseNode
-                                | undefined;
-                              if (!n || n.type !== "ellipse") return d;
-                              const centerY = n.y + n.h / 2;
-                              const newH = clamp(nextRy * 2, 24, 3200);
-                              return {
-                                ...d,
-                                nodes: {
-                                  ...d.nodes,
-                                  [n.id]: {
-                                    ...n,
-                                    h: newH,
-                                    y: centerY - newH / 2,
-                                  },
-                                },
-                              };
-                            });
-                          }}
-                        />
-                      </InputGroup>
-                    </div>
-                  )
-                  : null}
-
-                {selectedNode.type === "rect"
-                  ? (
-                    <div>
-                      <div className="text-sm font-semibold">角丸</div>
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <InputGroup label="左上">
-                          <Input
-                            inputMode="numeric"
-                            value={String(
-                              Math.round(selectedNode.props.radius.tl),
-                            )}
-                            onChange={(e) => {
-                              const next = Number(e.target.value);
-                              if (!Number.isFinite(next)) return;
-                              setDoc((d) => ({
-                                ...d,
-                                nodes: {
-                                  ...d.nodes,
-                                  [selectedNode.id]: {
-                                    ...selectedNode,
-                                    props: {
-                                      ...selectedNode.props,
-                                      radius: {
-                                        ...selectedNode.props.radius,
-                                        tl: clamp(next, 0, 999),
-                                      },
-                                    },
-                                  },
-                                },
-                              }));
-                            }}
-                          />
-                        </InputGroup>
-                        <InputGroup label="右上">
-                          <Input
-                            inputMode="numeric"
-                            value={String(
-                              Math.round(selectedNode.props.radius.tr),
-                            )}
-                            onChange={(e) => {
-                              const next = Number(e.target.value);
-                              if (!Number.isFinite(next)) return;
-                              setDoc((d) => ({
-                                ...d,
-                                nodes: {
-                                  ...d.nodes,
-                                  [selectedNode.id]: {
-                                    ...selectedNode,
-                                    props: {
-                                      ...selectedNode.props,
-                                      radius: {
-                                        ...selectedNode.props.radius,
-                                        tr: clamp(next, 0, 999),
-                                      },
-                                    },
-                                  },
-                                },
-                              }));
-                            }}
-                          />
-                        </InputGroup>
-                        <InputGroup label="右下">
-                          <Input
-                            inputMode="numeric"
-                            value={String(
-                              Math.round(selectedNode.props.radius.br),
-                            )}
-                            onChange={(e) => {
-                              const next = Number(e.target.value);
-                              if (!Number.isFinite(next)) return;
-                              setDoc((d) => ({
-                                ...d,
-                                nodes: {
-                                  ...d.nodes,
-                                  [selectedNode.id]: {
-                                    ...selectedNode,
-                                    props: {
-                                      ...selectedNode.props,
-                                      radius: {
-                                        ...selectedNode.props.radius,
-                                        br: clamp(next, 0, 999),
-                                      },
-                                    },
-                                  },
-                                },
-                              }));
-                            }}
-                          />
-                        </InputGroup>
-                        <InputGroup label="左下">
-                          <Input
-                            inputMode="numeric"
-                            value={String(
-                              Math.round(selectedNode.props.radius.bl),
-                            )}
-                            onChange={(e) => {
-                              const next = Number(e.target.value);
-                              if (!Number.isFinite(next)) return;
-                              setDoc((d) => ({
-                                ...d,
-                                nodes: {
-                                  ...d.nodes,
-                                  [selectedNode.id]: {
-                                    ...selectedNode,
-                                    props: {
-                                      ...selectedNode.props,
-                                      radius: {
-                                        ...selectedNode.props.radius,
-                                        bl: clamp(next, 0, 999),
-                                      },
-                                    },
-                                  },
-                                },
-                              }));
-                            }}
-                          />
-                        </InputGroup>
-                      </div>
-                    </div>
-                  )
-                  : null}
-
-                {selectedNode.type === "text"
-                  ? (
-                    <InputGroup label="テキスト">
-                      <textarea
-                        className="mt-1 h-24 w-full resize-none rounded-md border bg-background p-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
-                        value={selectedNode.props.text}
-                        onChange={(e) => {
-                          const next = e.target.value;
-                          setDoc((d) => ({
-                            ...d,
-                            nodes: {
-                              ...d.nodes,
-                              [selectedNode.id]: {
-                                ...selectedNode,
-                                props: { ...selectedNode.props, text: next },
-                              },
-                            },
-                          }));
-                        }}
-                      />
-                    </InputGroup>
-                  )
-                  : null}
-
-                {selectedNode.type === "image"
-                  ? (
-                    <InputGroup label="画像URL">
-                      <Input
-                        value={selectedNode.props.src}
-                        onChange={(e) => {
-                          const next = e.target.value;
-                          setDoc((d) => ({
-                            ...d,
-                            nodes: {
-                              ...d.nodes,
-                              [selectedNode.id]: {
-                                ...selectedNode,
-                                props: { ...selectedNode.props, src: next },
-                              },
-                            },
-                          }));
-                        }}
-                      />
-                    </InputGroup>
-                  )
-                  : null}
+                {(() => {
+                  const nodeDef = nodeRegistry.get(selectedNode.type);
+                  if (!nodeDef?.inspector) return null;
+                  return nodeDef.inspector({
+                    node: selectedNode as never,
+                    updateNode: (updater) =>
+                      setDoc((d) => {
+                        const cur = d.nodes[selectedNode.id];
+                        if (!cur) return d;
+                        return {
+                          ...d,
+                          nodes: {
+                            ...d.nodes,
+                            [selectedNode.id]: updater(cur as never) as DocNode,
+                          },
+                        };
+                      }),
+                  });
+                })()}
 
                 <Button
                   variant="destructive"

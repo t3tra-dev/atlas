@@ -25,42 +25,47 @@ export function AppSidebar() {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
-        {isCollapsed ? (
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
+        {isCollapsed
+          ? (
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  type="button"
+                  tooltip="検索"
+                  onClick={() => setOpen(true)}
+                  aria-label="検索"
+                >
+                  <SearchIcon />
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  type="button"
+                  tooltip="新規ドキュメント"
+                  className="bg-white text-black border border-black/20 hover:bg-white/90 hover:text-black dark:bg-white dark:text-black"
+                  onClick={() => setOpen(true)}
+                  aria-label="新規ドキュメント"
+                >
+                  <PlusIcon />
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          )
+          : (
+            <>
+              <SidebarInput
+                placeholder="検索…"
+                aria-label="ドキュメントを検索"
+              />
+              <Button
+                className="w-full justify-start bg-white text-black border border-black/20 hover:bg-white/90 hover:text-black dark:bg-white dark:text-black"
                 type="button"
-                tooltip="検索"
-                onClick={() => setOpen(true)}
-                aria-label="検索"
-              >
-                <SearchIcon />
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                type="button"
-                tooltip="新規ドキュメント"
-                className="bg-white text-black border border-black/20 hover:bg-white/90 hover:text-black dark:bg-white dark:text-black"
-                onClick={() => setOpen(true)}
-                aria-label="新規ドキュメント"
               >
                 <PlusIcon />
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        ) : (
-          <>
-            <SidebarInput placeholder="検索…" aria-label="ドキュメントを検索" />
-            <Button
-              className="w-full justify-start bg-white text-black border border-black/20 hover:bg-white/90 hover:text-black dark:bg-white dark:text-black"
-              type="button"
-            >
-              <PlusIcon />
-              新規ドキュメント
-            </Button>
-          </>
-        )}
+                新規ドキュメント
+              </Button>
+            </>
+          )}
       </SidebarHeader>
 
       {!isCollapsed && <SidebarSeparator />}
@@ -80,7 +85,7 @@ export function AppSidebar() {
           variant="ghost"
           className={cn(
             "w-full gap-2",
-            isCollapsed ? "justify-center" : "justify-start"
+            isCollapsed ? "justify-center" : "justify-start",
           )}
           onClick={toggleSidebar}
           aria-label="サイドバーを開閉"

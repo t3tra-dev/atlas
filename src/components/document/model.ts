@@ -1,10 +1,9 @@
-export type NodeType = "text" | "rect" | "ellipse" | "image"
+export type NodeType = string
 export type EdgeShape = "line" | "curve"
 export type EdgeArrow = "none" | "end" | "both"
 
 export type BaseNode = {
   id: string
-  type: NodeType
   x: number
   y: number
   w: number
@@ -12,50 +11,19 @@ export type BaseNode = {
   rotation?: number
 }
 
-export type TextNode = BaseNode & {
-  type: "text"
-  props: {
-    text: string
-    fontSize: number
-    color: string
-    align: "left" | "center" | "right"
-  }
+export type DocNodeBase<
+  TType extends string = string,
+  TProps = Record<string, unknown>
+> = BaseNode & {
+  type: TType
+  props: TProps
 }
 
-export type RectNode = BaseNode & {
-  type: "rect"
-  props: {
-    fill: string
-    stroke: string
-    strokeWidth: number
-    radius: {
-      tl: number
-      tr: number
-      br: number
-      bl: number
-    }
-  }
-}
-
-export type EllipseNode = BaseNode & {
-  type: "ellipse"
-  props: {
-    fill: string
-    stroke: string
-    strokeWidth: number
-  }
-}
-
-export type ImageNode = BaseNode & {
-  type: "image"
-  props: {
-    src: string
-    fit: "cover" | "contain"
-    borderRadius: number
-  }
-}
-
-export type DocNode = TextNode | RectNode | EllipseNode | ImageNode
+/**
+ * Extensible node type for documents.
+ * Built-in node typings live in plugins (e.g. `src/plugins/builtin.tsx`).
+ */
+export type DocNode = DocNodeBase<string, Record<string, unknown>>
 
 export type DocEdge = {
   id: string
@@ -134,7 +102,7 @@ export type DragState =
   | {
     kind: "drawShape";
     nodeId: string;
-    nodeType: "rect" | "ellipse";
+    nodeType: string;
     pointerId: number;
     startWorldX: number;
     startWorldY: number;
