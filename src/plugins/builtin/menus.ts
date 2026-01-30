@@ -1,12 +1,12 @@
 import type { MenuEntry } from "@/plugin";
-import type { NodeTypeDefinition } from "@/components/document/sdk";
+import type { NodeTypeDef } from "@/components/document/sdk";
 import { BUILTIN_COMMANDS, builtinAddNodeCommandId } from "./commands";
 
 function compareJa(a: string, b: string) {
   return a.localeCompare(b, "ja");
 }
 
-export function builtinAddMenu(nodes: Array<NodeTypeDefinition>): Array<MenuEntry> {
+export function builtinAddMenu(nodes: Array<NodeTypeDef>): Array<MenuEntry> {
   const shapeNodes = nodes
     .filter((d) => (d.category ?? "追加") === "図形")
     .slice()
@@ -114,13 +114,13 @@ export function builtinFileMenu(): Array<MenuEntry> {
       id: "builtin.json.export",
       label: "JSON書き出し",
       shortcut: "⌘S",
-      command: BUILTIN_COMMANDS.fileExportJson,
+      command: BUILTIN_COMMANDS.fileExportJSON,
     },
     {
       kind: "item",
       id: "builtin.json.import",
       label: "JSON読み込み",
-      command: BUILTIN_COMMANDS.fileImportJson,
+      command: BUILTIN_COMMANDS.fileImportJSON,
     },
   ];
 }

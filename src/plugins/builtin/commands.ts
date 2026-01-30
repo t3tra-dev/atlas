@@ -4,7 +4,7 @@ import type {
   PluginContext,
 } from "@/plugin";
 import type { DocEdge, DocumentModel, Selection } from "@/components/document/model";
-import type { NodeTypeDefinition } from "@/components/document/sdk";
+import type { NodeTypeDef } from "@/components/document/sdk";
 
 function deleteSelectedFromDoc(doc: DocumentModel, selection: Selection) {
   if (selection.kind === "node") {
@@ -47,8 +47,8 @@ function deleteSelectedFromDoc(doc: DocumentModel, selection: Selection) {
 }
 
 export const BUILTIN_COMMANDS = {
-  fileExportJson: "file.exportJson",
-  fileImportJson: "file.importJson",
+  fileExportJSON: "file.exportJSON",
+  fileImportJSON: "file.importJSON",
   editDeleteSelected: "edit.deleteSelected",
   editClearSelection: "edit.clearSelection",
   viewZoomIn: "view.zoomIn",
@@ -70,7 +70,7 @@ export function builtinAddNodeCommandId(nodeType: string) {
 
 export function builtinCommands(
   ctx: PluginContext,
-  nodes: Array<NodeTypeDefinition>,
+  nodes: Array<NodeTypeDef>,
 ): Array<CommandContribution> {
   const nodeCommands: Array<CommandContribution> = nodes.map((d) => ({
     id: builtinAddNodeCommandId(d.type),
@@ -81,14 +81,14 @@ export function builtinCommands(
   return [
     ...nodeCommands,
     {
-      id: BUILTIN_COMMANDS.fileExportJson,
+      id: BUILTIN_COMMANDS.fileExportJSON,
       title: "JSON書き出し",
-      run: () => ctx.sdk.ui.openJsonSheet("export"),
+      run: () => ctx.sdk.ui.openJSONSheet("export"),
     },
     {
-      id: BUILTIN_COMMANDS.fileImportJson,
+      id: BUILTIN_COMMANDS.fileImportJSON,
       title: "JSON読み込み",
-      run: () => ctx.sdk.ui.openJsonSheet("import"),
+      run: () => ctx.sdk.ui.openJSONSheet("import"),
     },
     {
       id: BUILTIN_COMMANDS.editDeleteSelected,
@@ -204,7 +204,7 @@ export function builtinKeybindings(): Array<KeybindingContribution> {
   return [
     {
       keys: "mod+s",
-      command: BUILTIN_COMMANDS.fileExportJson,
+      command: BUILTIN_COMMANDS.fileExportJSON,
       preventDefault: true,
     },
     {

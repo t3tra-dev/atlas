@@ -24,8 +24,8 @@ import {
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
-import { createDocumentSdk } from "@/components/document/sdk";
-import type { NodeTypeDefinition } from "@/components/document/sdk";
+import { createDocumentSDK } from "@/components/document/sdk";
+import type { NodeTypeDef } from "@/components/document/sdk";
 import { createPluginHost } from "@/components/document/plugin-system";
 import { BuiltinPlugin } from "@/plugins/builtin";
 
@@ -387,7 +387,7 @@ function NodeView({
   onDoubleClick,
 }: {
   node: DocNode;
-  nodeDef: NodeTypeDefinition;
+  nodeDef: NodeTypeDef;
   selected: boolean;
   scale: number;
   onPointerDown: (e: React.PointerEvent) => void;
@@ -463,7 +463,7 @@ function ResizeHandle(
   );
 }
 
-function JsonSheet({
+function JSONSheet({
   open,
   mode,
   value,
@@ -557,10 +557,10 @@ export function DocumentEditor({ className }: { className?: string }) {
     null | { x: number; y: number }
   >(null);
 
-  const [jsonSheet, setJsonSheet] = React.useState<
+  const [jsonSheet, setJSONSheet] = React.useState<
     null | { mode: "export" | "import"; error: string | null }
   >(null);
-  const [jsonDraft, setJsonDraft] = React.useState<string>("");
+  const [jsonDraft, setJSONDraft] = React.useState<string>("");
 
   const viewportRect = React.useCallback(
     () => viewportRef.current?.getBoundingClientRect() ?? null,
@@ -608,18 +608,18 @@ export function DocumentEditor({ className }: { className?: string }) {
     [camera.scale, camera.x, camera.y, viewportSize.height, viewportSize.width],
   );
 
-  const openJsonSheet = React.useCallback(
+  const openJSONSheet = React.useCallback(
     (mode: "export" | "import") => {
-      setJsonDraft(JSON.stringify(doc, null, 2));
-      setJsonSheet({ mode, error: null });
+      setJSONDraft(JSON.stringify(doc, null, 2));
+      setJSONSheet({ mode, error: null });
     },
     [doc],
   );
 
   const sdk = React.useMemo(
     () =>
-      createDocumentSdk({
-        ui: { openJsonSheet },
+      createDocumentSDK({
+        ui: { openJSONSheet },
         doc: {
           get: () => doc,
           set: (next) => setDoc(next),
@@ -644,7 +644,7 @@ export function DocumentEditor({ className }: { className?: string }) {
           zoomBy: (delta) => zoomToCentered(camera.scale + delta),
         },
       }),
-    [camera, doc, openJsonSheet, selection, tool, zoomToCentered],
+    [camera, doc, openJSONSheet, selection, tool, zoomToCentered],
   );
 
   const pluginHost = React.useMemo(
@@ -1095,16 +1095,16 @@ export function DocumentEditor({ className }: { className?: string }) {
     [doc.nodes, nodeRegistry],
   );
 
-  const docJson = React.useMemo(() => JSON.stringify(doc, null, 2), [doc]);
+  const docJSON = React.useMemo(() => JSON.stringify(doc, null, 2), [doc]);
 
   const onExport = React.useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(docJson);
-      setJsonSheet((
+      await navigator.clipboard.writeText(docJSON);
+      setJSONSheet((
         s,
       ) => (s ? { ...s, error: null } : { mode: "export", error: null }));
     } catch {
-      setJsonSheet((s) =>
+      setJSONSheet((s) =>
         s
           ? {
             ...s,
@@ -1118,18 +1118,18 @@ export function DocumentEditor({ className }: { className?: string }) {
           }
       );
     }
-  }, [docJson]);
+  }, [docJSON]);
 
   const onImportConfirm = React.useCallback((value: string) => {
     const parsed = safeParseDoc(value);
     if (!parsed.ok) {
-      setJsonSheet({ mode: "import", error: parsed.error });
+      setJSONSheet({ mode: "import", error: parsed.error });
       return;
     }
     setDoc(parsed.doc);
     setSelection({ kind: "none" });
     setTool({ kind: "select" });
-    setJsonSheet(null);
+    setJSONSheet(null);
   }, []);
 
   const selectedNode = selectedNodeId ? doc.nodes[selectedNodeId] : null;
@@ -1896,15 +1896,15 @@ export function DocumentEditor({ className }: { className?: string }) {
         </div>
       </div>
 
-      <JsonSheet
+      <JSONSheet
         open={jsonSheet != null}
         mode={jsonSheet?.mode ?? "export"}
         value={jsonDraft}
         error={jsonSheet?.error ?? null}
         onOpenChange={(open) => {
-          if (!open) setJsonSheet(null);
+          if (!open) setJSONSheet(null);
         }}
-        onChange={(v) => setJsonDraft(v)}
+        onChange={(v) => setJSONDraft(v)}
         onPrimary={async () => {
           if (jsonSheet?.mode === "export") {
             await onExport();

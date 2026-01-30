@@ -1,4 +1,4 @@
-import type { DocumentSDK, NodeTypeDefinition } from "@/components/document/sdk";
+import type { DocumentSDK, NodeTypeDef } from "@/components/document/sdk";
 
 export interface PluginContext {
   sdk: DocumentSDK;
@@ -58,7 +58,7 @@ export interface KeybindingContribution {
 }
 
 export interface PluginContribution {
-  nodes?: Array<NodeTypeDefinition>;
+  nodes?: Array<NodeTypeDef>;
   menus?: MenuContribution;
   commands?: Array<CommandContribution>;
   keybindings?: Array<KeybindingContribution>;
@@ -74,4 +74,4 @@ export interface BasePlugin {
   register: (ctx: PluginContext) => PluginContribution;
 }
 
-export type { DocumentSDK, NodeTypeDefinition };
+export type { DocumentSDK, NodeTypeDef };

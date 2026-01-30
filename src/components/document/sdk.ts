@@ -10,31 +10,31 @@ import type {
   Tool,
 } from "@/components/document/model";
 
-export type JsonSheetMode = "export" | "import";
+export type JSONSheetMode = "export" | "import";
 
-export interface DocumentApi {
+export interface DocumentAPI {
   get: () => DocumentModel;
   set: (next: DocumentModel) => void;
   update: (updater: (prev: DocumentModel) => DocumentModel) => void;
 }
 
-export interface SelectionApi {
+export interface SelectionAPI {
   get: () => Selection;
   set: (next: Selection) => void;
   clear: () => void;
 }
 
-export interface ToolApi {
+export interface ToolAPI {
   get: () => Tool;
   set: (next: Tool) => void;
 }
 
-export interface CameraApi {
+export interface CameraAPI {
   get: () => Camera;
   set: (next: Camera | ((prev: Camera) => Camera)) => void;
 }
 
-export interface ViewportApi {
+export interface ViewportAPI {
   /** Zoom to a target scale (host decides anchor/clamping). */
   zoomTo: (nextScale: number) => void;
   /** Zoom relative to current scale (host decides anchor/clamping). */
@@ -79,7 +79,7 @@ export interface NodeDoubleClickContext {
   updateNode: (updater: (prev: DocNode) => DocNode) => void;
 }
 
-export interface NodeTypeDefinition {
+export interface NodeTypeDef {
   type: string;
   title: string;
   category?: string;
@@ -101,23 +101,23 @@ export interface DocumentSDK {
    * Plugins can call these to trigger editor UI.
    */
   ui: {
-    openJsonSheet: (mode: JsonSheetMode) => void;
+    openJSONSheet: (mode: JSONSheetMode) => void;
   };
 
-  doc: DocumentApi;
-  selection: SelectionApi;
-  tool: ToolApi;
-  camera: CameraApi;
-  viewport: ViewportApi;
+  doc: DocumentAPI;
+  selection: SelectionAPI;
+  tool: ToolAPI;
+  camera: CameraAPI;
+  viewport: ViewportAPI;
 }
 
 const noopUi: DocumentSDK["ui"] = {
-  openJsonSheet: () => {
+  openJSONSheet: () => {
     // no-op (useful for tests or non-editor contexts)
   },
 };
 
-const noopDoc: DocumentApi = {
+const noopDoc: DocumentAPI = {
   get: () => ({
     version: 1,
     canvas: { width: 1920, height: 1080, background: "grid" },
@@ -134,7 +134,7 @@ const noopDoc: DocumentApi = {
   },
 };
 
-const noopSelection: SelectionApi = {
+const noopSelection: SelectionAPI = {
   get: () => ({ kind: "none" }),
   set: () => {
     // no-op
@@ -144,21 +144,21 @@ const noopSelection: SelectionApi = {
   },
 };
 
-const noopTool: ToolApi = {
+const noopTool: ToolAPI = {
   get: () => ({ kind: "select" }),
   set: () => {
     // no-op
   },
 };
 
-const noopCamera: CameraApi = {
+const noopCamera: CameraAPI = {
   get: () => ({ x: 0, y: 0, scale: 1 }),
   set: () => {
     // no-op
   },
 };
 
-const noopViewport: ViewportApi = {
+const noopViewport: ViewportAPI = {
   zoomTo: () => {
     // no-op
   },
@@ -167,13 +167,13 @@ const noopViewport: ViewportApi = {
   },
 };
 
-export function createDocumentSdk(opts?: {
+export function createDocumentSDK(opts?: {
   ui?: DocumentSDK["ui"];
-  doc?: DocumentApi;
-  selection?: SelectionApi;
-  tool?: ToolApi;
-  camera?: CameraApi;
-  viewport?: ViewportApi;
+  doc?: DocumentAPI;
+  selection?: SelectionAPI;
+  tool?: ToolAPI;
+  camera?: CameraAPI;
+  viewport?: ViewportAPI;
 }): DocumentSDK {
   const ui = opts?.ui ?? noopUi;
   const doc = opts?.doc ?? noopDoc;

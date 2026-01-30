@@ -3,7 +3,7 @@ import { InputGroup } from "@/components/ui/input-group";
 
 import type {
   NodeRenderResult,
-  NodeTypeDefinition,
+  NodeTypeDef,
 } from "@/components/document/sdk";
 import type { DocNode, DocNodeBase } from "@/components/document/model";
 
@@ -49,7 +49,7 @@ export type ImageNode = DocNodeBase<
   }
 >;
 
-function rectNodeDef(): NodeTypeDefinition {
+function rectNodeDef(): NodeTypeDef {
   return {
     type: "rect",
     title: "四角形",
@@ -184,7 +184,7 @@ function rectNodeDef(): NodeTypeDefinition {
   };
 }
 
-function ellipseNodeDef(): NodeTypeDefinition {
+function ellipseNodeDef(): NodeTypeDef {
   return {
     type: "ellipse",
     title: "円",
@@ -261,7 +261,7 @@ function ellipseNodeDef(): NodeTypeDefinition {
   };
 }
 
-function textNodeDef(): NodeTypeDefinition {
+function textNodeDef(): NodeTypeDef {
   return {
     type: "text",
     title: "テキスト",
@@ -334,7 +334,7 @@ function textNodeDef(): NodeTypeDefinition {
   };
 }
 
-function imageNodeDef(): NodeTypeDefinition {
+function imageNodeDef(): NodeTypeDef {
   return {
     type: "image",
     title: "画像",
@@ -409,6 +409,6 @@ function imageNodeDef(): NodeTypeDefinition {
   };
 }
 
-export function builtinNodes(): Array<NodeTypeDefinition> {
+export function builtinNodes(): Array<NodeTypeDef> {
   return [textNodeDef(), rectNodeDef(), ellipseNodeDef(), imageNodeDef()];
 }

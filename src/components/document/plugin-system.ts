@@ -1,4 +1,4 @@
-import type { NodeTypeDefinition } from "@/components/document/sdk";
+import type { NodeTypeDef } from "@/components/document/sdk";
 import type {
   BasePlugin,
   CommandContribution,
@@ -8,8 +8,8 @@ import type {
 } from "@/plugin";
 
 export interface NodeRegistry {
-  get: (type: string) => NodeTypeDefinition | undefined;
-  list: () => Array<NodeTypeDefinition>;
+  get: (type: string) => NodeTypeDef | undefined;
+  list: () => Array<NodeTypeDef>;
 }
 
 export interface PluginHost {
@@ -34,7 +34,7 @@ export function createPluginHost(
   plugins: Array<BasePlugin>,
   ctx: PluginContext,
 ): PluginHost {
-  const nodeMap = new Map<string, NodeTypeDefinition>();
+  const nodeMap = new Map<string, NodeTypeDef>();
   const addMenu: Array<MenuEntry> = [];
   const fileMenu: Array<MenuEntry> = [];
   const editMenu: Array<MenuEntry> = [];
