@@ -7,13 +7,14 @@ function compareJa(a: string, b: string) {
 }
 
 export function builtinAddMenu(nodes: Array<NodeTypeDef>): Array<MenuEntry> {
+  const shapeNode = nodes.find((d) => d.type === "shape");
   const shapeNodes = nodes
-    .filter((d) => (d.category ?? "追加") === "図形")
+    .filter((d) => (d.category ?? "追加") === "図形" && d.type !== "shape")
     .slice()
     .sort((a, b) => compareJa(a.title, b.title));
 
   const otherNodes = nodes
-    .filter((d) => (d.category ?? "追加") !== "図形")
+    .filter((d) => (d.category ?? "追加") !== "図形" && d.type !== "shape")
     .slice()
     .sort((a, b) => compareJa(a.title, b.title));
 
@@ -91,16 +92,97 @@ export function builtinAddMenu(nodes: Array<NodeTypeDef>): Array<MenuEntry> {
 
   const addMenu: Array<MenuEntry> = [...nodeItems];
 
-  if (shapeItems.length) {
+  if (shapeNode) {
+    const shapePresetEntries: Array<MenuEntry> = [
+      {
+        kind: "item",
+        id: "builtin.shape.rect",
+        label: "四角形",
+        command: BUILTIN_COMMANDS.addShapeRect,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.stadium",
+        label: "スタジアム",
+        command: BUILTIN_COMMANDS.addShapeStadium,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.circle",
+        label: "円",
+        command: BUILTIN_COMMANDS.addShapeCircle,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.doublecircle",
+        label: "二重円",
+        command: BUILTIN_COMMANDS.addShapeDoubleCircle,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.diamond",
+        label: "ダイヤ",
+        command: BUILTIN_COMMANDS.addShapeDiamond,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.hexagon",
+        label: "六角形",
+        command: BUILTIN_COMMANDS.addShapeHexagon,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.parallelogram",
+        label: "平行四辺形",
+        command: BUILTIN_COMMANDS.addShapeParallelogram,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.trapezoid",
+        label: "台形",
+        command: BUILTIN_COMMANDS.addShapeTrapezoid,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.invtrapezoid",
+        label: "逆台形",
+        command: BUILTIN_COMMANDS.addShapeInvTrapezoid,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.subroutine",
+        label: "サブルーチン",
+        command: BUILTIN_COMMANDS.addShapeSubroutine,
+      },
+      {
+        kind: "item",
+        id: "builtin.shape.cylinder",
+        label: "データベース",
+        command: BUILTIN_COMMANDS.addShapeCylinder,
+      },
+    ];
+
     addMenu.push({
       kind: "submenu",
       id: "builtin.add.shapes",
       label: "図形",
       entries: [
-        ...shapeItems,
-        { kind: "separator" },
+        ...shapePresetEntries,
+        ...(shapeItems.length ? [{ kind: "separator" } as MenuEntry, ...shapeItems] : []),
+        { kind: "separator" } as MenuEntry,
         connectMenu,
       ],
+    });
+
+    return addMenu;
+  }
+
+  if (shapeItems.length) {
+    addMenu.push({
+      kind: "submenu",
+      id: "builtin.add.shapes",
+      label: "図形",
+      entries: [...shapeItems, { kind: "separator" }, connectMenu],
     });
   }
 
@@ -121,6 +203,12 @@ export function builtinFileMenu(): Array<MenuEntry> {
       id: "builtin.json.import",
       label: "JSON読み込み",
       command: BUILTIN_COMMANDS.fileImportJSON,
+    },
+    {
+      kind: "item",
+      id: "builtin.mermaid.import",
+      label: "Mermaid読み込み",
+      command: BUILTIN_COMMANDS.fileImportMermaid,
     },
   ];
 }

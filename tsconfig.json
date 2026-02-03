@@ -19,6 +19,6 @@
     "types": ["node"],
     "moduleResolution": "nodenext",
     "module": "nodenext",
-    "target": "esnext",
+    "target": "esnext"
   }
 }

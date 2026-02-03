@@ -1,8 +1,17 @@
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { InputGroup } from "@/components/ui/input-group";
+import { Label } from "@/components/ui/label";
 import {
   Menubar,
   MenubarContent,
@@ -27,7 +36,10 @@ import { cn } from "@/lib/utils";
 import { createDocumentSDK } from "@/components/document/sdk";
 import type { NodeTypeDef } from "@/components/document/sdk";
 import { createPluginHost } from "@/components/document/plugin-system";
+import { useDocumentStore } from "@/components/document/store";
+import { createDefaultDocument } from "@/components/document/default-doc";
 import { BuiltinPlugin } from "@/plugins/builtin";
+import { buildMermaidElements } from "@/plugins/builtin/mermaid";
 
 import type { MenuEntry } from "@/plugin";
 
@@ -41,7 +53,6 @@ import type {
   Selection,
   Tool,
 } from "@/components/document/model";
-import { STORAGE_KEY } from "@/components/document/model";
 
 function isTextInputTarget(target: EventTarget | null) {
   const el = target as HTMLElement | null;
@@ -59,11 +70,7 @@ function normalizeHotkeyKey(k: string) {
   return key;
 }
 
-function matchKeybinding(
-  keys: string,
-  e: KeyboardEvent,
-  isMac: boolean,
-): boolean {
+function matchKeybinding(keys: string, e: KeyboardEvent, isMac: boolean): boolean {
   const parts = keys
     .toLowerCase()
     .split("+")
@@ -72,8 +79,7 @@ function matchKeybinding(
 
   const wants = new Set(parts);
   const keyPart = parts.find(
-    (p) =>
-      !["mod", "meta", "cmd", "ctrl", "shift", "alt", "option"].includes(p),
+    (p) => !["mod", "meta", "cmd", "ctrl", "shift", "alt", "option"].includes(p),
   );
   if (!keyPart) return false;
 
@@ -99,16 +105,14 @@ function matchKeybinding(
 }
 
 function isMacPlatform() {
-  return (
-    typeof navigator !== "undefined" &&
-    /Mac|iPhone|iPad|iPod/.test(navigator.platform)
-  );
+  return typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 }
 
 function newId(prefix: string) {
-  const random = typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random()}`;
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`;
   return `${prefix}_${String(random).replaceAll("-", "")}`;
 }
 
@@ -136,75 +140,71 @@ function getNodeCenter(node: DocNode) {
   return { x: node.x + node.w / 2, y: node.y + node.h / 2 };
 }
 
-function defaultDoc(): DocumentModel {
-  const rectId = newId("node");
-  const textId = newId("node");
-  const ellipseId = newId("node");
+type ConnectionShape = "rect" | "ellipse" | "diamond";
 
-  const nodes: Record<string, DocNode> = {
-    [rectId]: {
-      id: rectId,
-      type: "rect",
-      x: 240,
-      y: 180,
-      w: 240,
-      h: 140,
-      props: {
-        fill: "rgba(59, 130, 246, 0.10)",
-        stroke: "rgba(59, 130, 246, 0.55)",
-        strokeWidth: 2,
-        radius: { tl: 14, tr: 14, br: 14, bl: 14 },
-      },
-    },
-    [ellipseId]: {
-      id: ellipseId,
-      type: "ellipse",
-      x: 620,
-      y: 360,
-      w: 180,
-      h: 140,
-      props: {
-        fill: "rgba(16, 185, 129, 0.10)",
-        stroke: "rgba(16, 185, 129, 0.55)",
-        strokeWidth: 2,
-      },
-    },
-    [textId]: {
-      id: textId,
-      type: "text",
-      x: 560,
-      y: 160,
-      w: 260,
-      h: 90,
-      props: {
-        text: "Atlas Document\n(HTMLベース)",
-        fontSize: 18,
-        color: "var(--foreground)",
-        align: "left",
-      },
-    },
-  };
+function getNodeConnectionShape(node: DocNode): ConnectionShape {
+  if (node.type === "shape") {
+    const shape = (node.props as { shape?: string }).shape;
+    if (shape === "diamond") return "diamond";
+    if (shape === "circle" || shape === "doublecircle") return "ellipse";
+    return "rect";
+  }
+  return "rect";
+}
 
-  const edgeId = newId("edge");
-  const edges: Record<string, DocEdge> = {
-    [edgeId]: {
-      id: edgeId,
-      shape: "curve",
-      arrow: "none",
-      from: rectId,
-      to: ellipseId,
-      props: { color: "#111827", width: 2, dash: "solid" },
-    },
-  };
+function getNodeConnectionPoint(node: DocNode, toward: { x: number; y: number }) {
+  const center = getNodeCenter(node);
+  const dx = toward.x - center.x;
+  const dy = toward.y - center.y;
+  if (dx === 0 && dy === 0) return center;
 
-  return {
-    version: 1,
-    canvas: { width: 3200, height: 2200, background: "grid" },
-    nodes,
-    nodeOrder: [rectId, textId, ellipseId],
-    edges,
-    edgeOrder: [edgeId],
-  };
+  const halfW = Math.max(1, node.w / 2);
+  const halfH = Math.max(1, node.h / 2);
+  const shape = getNodeConnectionShape(node);
+
+  if (shape === "diamond") {
+    const denom = Math.abs(dx) / halfW + Math.abs(dy) / halfH;
+    const scale = denom > 0 ? 1 / denom : 1;
+    return { x: center.x + dx * scale, y: center.y + dy * scale };
+  }
+
+  let scale = 1;
+  if (shape === "ellipse") {
+    const denom = Math.sqrt((dx * dx) / (halfW * halfW) + (dy * dy) / (halfH * halfH));
+    scale = denom > 0 ? 1 / denom : 1;
+  } else {
+    const denom = Math.max(Math.abs(dx) / halfW, Math.abs(dy) / halfH);
+    scale = denom > 0 ? 1 / denom : 1;
+  }
+
+  return { x: center.x + dx * scale, y: center.y + dy * scale };
+}
+
+function computeBoundsFromNodes(nodes: Record<string, DocNode>) {
+  let bounds: null | {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  } = null;
+  for (const node of Object.values(nodes)) {
+    if (!bounds) {
+      bounds = {
+        minX: node.x,
+        minY: node.y,
+        maxX: node.x + node.w,
+        maxY: node.y + node.h,
+      };
+      continue;
+    }
+    bounds = {
+      minX: Math.min(bounds.minX, node.x),
+      minY: Math.min(bounds.minY, node.y),
+      maxX: Math.max(bounds.maxX, node.x + node.w),
+      maxY: Math.max(bounds.maxY, node.y + node.h),
+    };
+  }
+  return bounds;
 }
 
 function safeParseDoc(
@@ -234,9 +234,7 @@ function safeParseDoc(
 
       const edgeObj = rawEdge as Record<string, unknown>;
 
-      if (
-        typeof edgeObj.shape === "string" && typeof edgeObj.arrow === "string"
-      ) {
+      if (typeof edgeObj.shape === "string" && typeof edgeObj.arrow === "string") {
         nextEdges[edgeId] = rawEdge as DocEdge;
         continue;
       }
@@ -251,24 +249,28 @@ function safeParseDoc(
         props: {
           color: (() => {
             const props = edgeObj.props;
-            const propsObj = props && typeof props === "object"
-              ? (props as Record<string, unknown>)
-              : null;
+            const propsObj =
+              props && typeof props === "object" ? (props as Record<string, unknown>) : null;
             return String(propsObj?.color ?? "#111827");
           })(),
           width: (() => {
             const props = edgeObj.props;
-            const propsObj = props && typeof props === "object"
-              ? (props as Record<string, unknown>)
-              : null;
+            const propsObj =
+              props && typeof props === "object" ? (props as Record<string, unknown>) : null;
             return Number(propsObj?.width ?? 2);
           })(),
           dash: (() => {
             const props = edgeObj.props;
-            const propsObj = props && typeof props === "object"
-              ? (props as Record<string, unknown>)
-              : null;
+            const propsObj =
+              props && typeof props === "object" ? (props as Record<string, unknown>) : null;
             return propsObj?.dash === "dashed" ? "dashed" : "solid";
+          })(),
+          curve: (() => {
+            const props = edgeObj.props;
+            const propsObj =
+              props && typeof props === "object" ? (props as Record<string, unknown>) : null;
+            const raw = propsObj?.curve;
+            return typeof raw === "number" ? raw : undefined;
           })(),
         },
       };
@@ -283,6 +285,7 @@ function safeParseDoc(
         base.shape = "curve";
         // Old implementation always rendered an end marker for curve.
         base.arrow = "end";
+        base.props.curve = base.props.curve ?? 0.25;
       }
 
       nextEdges[edgeId] = base;
@@ -290,39 +293,8 @@ function safeParseDoc(
 
     migrated.edges = nextEdges;
 
-    // Migrate legacy rect props.radius: number -> {tl,tr,br,bl}
-    const nextNodes: Record<string, DocNode> = { ...migrated.nodes };
-    for (const nodeId of migrated.nodeOrder) {
-      const rawNode = (migrated.nodes as Record<string, unknown>)[nodeId];
-      if (!rawNode || typeof rawNode !== "object") continue;
-      const nodeObj = rawNode as Record<string, unknown>;
-      if (nodeObj.type !== "rect") continue;
-      const props = nodeObj.props;
-      const propsObj = props && typeof props === "object"
-        ? (props as Record<string, unknown>)
-        : null;
-      const r = propsObj?.radius as unknown;
-      if (typeof r === "number") {
-        const rect = rawNode as DocNode;
-        nextNodes[nodeId] = {
-          ...rect,
-          props: {
-            ...(rect.props as Record<string, unknown>),
-            radius: { tl: r, tr: r, br: r, bl: r },
-          },
-        } as DocNode;
-      } else if (!r || typeof r !== "object") {
-        const rect = rawNode as DocNode;
-        nextNodes[nodeId] = {
-          ...rect,
-          props: {
-            ...(rect.props as Record<string, unknown>),
-            radius: { tl: 0, tr: 0, br: 0, bl: 0 },
-          },
-        } as DocNode;
-      }
-    }
-    migrated.nodes = nextNodes;
+    const normalizedTitle = typeof migrated.title === "string" ? migrated.title.trim() : "";
+    migrated.title = normalizedTitle || "インポート";
 
     return { ok: true, doc: migrated };
   } catch (e) {
@@ -333,11 +305,7 @@ function safeParseDoc(
   }
 }
 
-function toDocPoint(
-  e: React.PointerEvent,
-  viewport: HTMLDivElement,
-  camera: Camera,
-) {
+function toDocPoint(e: React.PointerEvent, viewport: HTMLDivElement, camera: Camera) {
   const rect = viewport.getBoundingClientRect();
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
@@ -350,31 +318,62 @@ function computeEdgePathFromPoints(
   shape: EdgeShape,
   a: { x: number; y: number },
   b: { x: number; y: number },
+  curveStrength = 0.25,
 ) {
   if (shape === "line") {
     return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
   }
 
   // curve
+  const { c1x, c1y, c2x, c2y } = computeCurveControlPoints(a, b, curveStrength);
+  // NOTE: keep numbers separated by spaces only (no commas) so scaling remains simple.
+  return `M ${a.x} ${a.y} C ${c1x} ${c1y} ${c2x} ${c2y} ${b.x} ${b.y}`;
+}
+
+function computeCurveControlPoints(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  curveStrength: number,
+) {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const dist = Math.max(1, Math.hypot(dx, dy));
+  const strength = clamp(curveStrength, 0.05, 0.6);
   // perpendicular bend
-  const nx = (-dy / dist) * Math.min(160, dist * 0.25);
-  const ny = (dx / dist) * Math.min(160, dist * 0.25);
+  const nx = (-dy / dist) * Math.min(160, dist * strength);
+  const ny = (dx / dist) * Math.min(160, dist * strength);
 
   const c1x = a.x + dx * 0.35 + nx;
   const c1y = a.y + dy * 0.35 + ny;
   const c2x = a.x + dx * 0.65 + nx;
   const c2y = a.y + dy * 0.65 + ny;
-  // NOTE: keep numbers separated by spaces only (no commas) so scaling remains simple.
-  return `M ${a.x} ${a.y} C ${c1x} ${c1y} ${c2x} ${c2y} ${b.x} ${b.y}`;
+  return { c1x, c1y, c2x, c2y };
 }
 
 function computeEdgePath(edge: DocEdge, fromNode: DocNode, toNode: DocNode) {
-  const a = getNodeCenter(fromNode);
-  const b = getNodeCenter(toNode);
-  return computeEdgePathFromPoints(edge.shape, a, b);
+  const toCenter = getNodeCenter(toNode);
+  const fromCenter = getNodeCenter(fromNode);
+  const a = getNodeConnectionPoint(fromNode, toCenter);
+  const b = getNodeConnectionPoint(toNode, fromCenter);
+  return computeEdgePathFromPoints(edge.shape, a, b, edge.props.curve ?? 0.25);
+}
+
+function computeEdgeLabelPosition(edge: DocEdge, fromNode: DocNode, toNode: DocNode) {
+  const toCenter = getNodeCenter(toNode);
+  const fromCenter = getNodeCenter(fromNode);
+  const a = getNodeConnectionPoint(fromNode, toCenter);
+  const b = getNodeConnectionPoint(toNode, fromCenter);
+
+  if (edge.shape === "line") {
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+
+  const { c1x, c1y, c2x, c2y } = computeCurveControlPoints(a, b, edge.props.curve ?? 0.25);
+  const t = 0.5;
+  const mt = 1 - t;
+  const x = mt ** 3 * a.x + 3 * mt ** 2 * t * c1x + 3 * mt * t ** 2 * c2x + t ** 3 * b.x;
+  const y = mt ** 3 * a.y + 3 * mt ** 2 * t * c1y + 3 * mt * t ** 2 * c2y + t ** 3 * b.y;
+  return { x, y };
 }
 
 function NodeView({
@@ -404,16 +403,17 @@ function NodeView({
     transformOrigin: "center",
   };
 
-  const outlineClass = selected
-    ? "ring-2 ring-ring ring-offset-2 ring-offset-background"
-    : "";
-
   const rendered = nodeDef.render({
     node,
     selected,
     scale,
     cn,
   });
+
+  const outlineClass =
+    selected && !rendered.suppressSelectionRing
+      ? "ring-2 ring-ring ring-offset-2 ring-offset-background"
+      : "";
 
   return (
     <div
@@ -428,22 +428,18 @@ function NodeView({
       onDoubleClick={onDoubleClick}
     >
       {rendered.children}
-      {selected && (
-        <ResizeHandle
-          scale={scale}
-          onPointerDown={onResizeHandlePointerDown}
-        />
-      )}
+      {selected && <ResizeHandle scale={scale} onPointerDown={onResizeHandlePointerDown} />}
     </div>
   );
 }
 
-function ResizeHandle(
-  { scale, onPointerDown }: {
-    scale: number;
-    onPointerDown: (e: React.PointerEvent) => void;
-  },
-) {
+function ResizeHandle({
+  scale,
+  onPointerDown,
+}: {
+  scale: number;
+  onPointerDown: (e: React.PointerEvent) => void;
+}) {
   const size = 10 * scale;
   return (
     <div
@@ -484,13 +480,9 @@ function JSONSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-[min(960px,calc(100vw-2rem))] sm:max-w-[960px]">
         <SheetHeader>
-          <SheetTitle>
-            {mode === "export" ? "JSON（書き出し）" : "JSON（読み込み）"}
-          </SheetTitle>
+          <SheetTitle>{mode === "export" ? "JSON（書き出し）" : "JSON（読み込み）"}</SheetTitle>
           <SheetDescription>
-            {mode === "export"
-              ? "Cmd/Ctrl+Sでも開けます"
-              : "貼り付けて読み込み"}
+            {mode === "export" ? "Cmd/Ctrl+Sでも開けます" : "貼り付けて読み込み"}
           </SheetDescription>
         </SheetHeader>
 
@@ -500,8 +492,7 @@ function JSONSheet({
             value={value}
             onChange={(e) => onChange(e.target.value)}
           />
-          {error && <div className="mt-2 text-sm text-destructive">{error}
-          </div>}
+          {error && <div className="mt-2 text-sm text-destructive">{error}</div>}
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               閉じる
@@ -518,6 +509,15 @@ function JSONSheet({
 
 export function DocumentEditor({ className }: { className?: string }) {
   const viewportRef = React.useRef<HTMLDivElement | null>(null);
+
+  const { activeDoc, setActiveDoc } = useDocumentStore();
+  const doc = activeDoc?.doc as DocumentModel;
+  const setDoc = React.useCallback(
+    (next: DocumentModel | ((prev: DocumentModel) => DocumentModel)) => {
+      setActiveDoc(next);
+    },
+    [setActiveDoc],
+  );
 
   const [viewportSize, setViewportSize] = React.useState({
     width: 1,
@@ -539,13 +539,6 @@ export function DocumentEditor({ className }: { className?: string }) {
     return () => ro.disconnect();
   }, []);
 
-  const [doc, setDoc] = React.useState<DocumentModel>(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultDoc();
-    const parsed = safeParseDoc(raw);
-    return parsed.ok ? parsed.doc : defaultDoc();
-  });
-
   const [camera, setCamera] = React.useState<Camera>({ x: 0, y: 0, scale: 1 });
   const [tool, setTool] = React.useState<Tool>({ kind: "select" });
   const [selection, setSelection] = React.useState<Selection>({ kind: "none" });
@@ -553,14 +546,28 @@ export function DocumentEditor({ className }: { className?: string }) {
 
   const [spaceDown, setSpaceDown] = React.useState(false);
 
-  const [connectPreview, setConnectPreview] = React.useState<
-    null | { x: number; y: number }
-  >(null);
+  const [connectPreview, setConnectPreview] = React.useState<null | {
+    x: number;
+    y: number;
+  }>(null);
 
-  const [jsonSheet, setJSONSheet] = React.useState<
-    null | { mode: "export" | "import"; error: string | null }
-  >(null);
+  const [jsonSheet, setJSONSheet] = React.useState<null | {
+    mode: "export" | "import";
+    error: string | null;
+  }>(null);
   const [jsonDraft, setJSONDraft] = React.useState<string>("");
+
+  const [mermaidDialog, setMermaidDialog] = React.useState<null | {
+    error: string | null;
+  }>(null);
+  const [mermaidDraft, setMermaidDraft] = React.useState<string>("");
+
+  React.useEffect(() => {
+    setSelection({ kind: "none" });
+    setTool({ kind: "select" });
+    setDrag({ kind: "none" });
+    setConnectPreview(null);
+  }, [activeDoc?.id]);
 
   const viewportRect = React.useCallback(
     () => viewportRef.current?.getBoundingClientRect() ?? null,
@@ -590,6 +597,26 @@ export function DocumentEditor({ className }: { className?: string }) {
     [camera.scale, camera.x, camera.y, viewportRect],
   );
 
+  const handleWheel = React.useCallback(
+    (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY;
+      const zoomFactor = Math.exp(-delta * 0.0012);
+      zoomToAtClient(camera.scale * zoomFactor, e.clientX, e.clientY);
+    },
+    [camera.scale, zoomToAtClient],
+  );
+
+  React.useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => handleWheel(event);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, [handleWheel]);
+
   const zoomToCentered = React.useCallback(
     (nextScale: number) => {
       const clamped = clamp(Number(nextScale.toFixed(3)), 0.2, 3);
@@ -616,10 +643,21 @@ export function DocumentEditor({ className }: { className?: string }) {
     [doc],
   );
 
+  const openMermaidImportDialog = React.useCallback(() => {
+    const flowchartSource: string = `flowchart TD
+    A[Christmas] -->|Get money| B(Go shopping)
+    B --> C{Let me think}
+    C -->|One| D[Laptop]
+    C -->|Two| E[iPhone]
+    C -->|Three| F[fa:fa-car Car]`;
+    setMermaidDraft(flowchartSource.trim());
+    setMermaidDialog({ error: null });
+  }, []);
+
   const sdk = React.useMemo(
     () =>
       createDocumentSDK({
-        ui: { openJSONSheet },
+        ui: { openJSONSheet, openMermaidImportDialog },
         doc: {
           get: () => doc,
           set: (next) => setDoc(next),
@@ -636,21 +674,17 @@ export function DocumentEditor({ className }: { className?: string }) {
         },
         camera: {
           get: () => camera,
-          set: (next) =>
-            setCamera((prev) => typeof next === "function" ? next(prev) : next),
+          set: (next) => setCamera((prev) => (typeof next === "function" ? next(prev) : next)),
         },
         viewport: {
           zoomTo: (nextScale) => zoomToCentered(nextScale),
           zoomBy: (delta) => zoomToCentered(camera.scale + delta),
         },
       }),
-    [camera, doc, openJSONSheet, selection, tool, zoomToCentered],
+    [camera, doc, openJSONSheet, openMermaidImportDialog, selection, setDoc, tool, zoomToCentered],
   );
 
-  const pluginHost = React.useMemo(
-    () => createPluginHost([BuiltinPlugin], { sdk }),
-    [sdk],
-  );
+  const pluginHost = React.useMemo(() => createPluginHost([BuiltinPlugin], { sdk }), [sdk]);
   const nodeRegistry = pluginHost.nodeRegistry;
   const addMenuEntries = pluginHost.menus.add;
   const fileMenuEntries = pluginHost.menus.file;
@@ -668,18 +702,6 @@ export function DocumentEditor({ className }: { className?: string }) {
 
   const selectedNodeId = selection.kind === "node" ? selection.id : null;
   const selectedEdgeId = selection.kind === "edge" ? selection.id : null;
-
-  // Persist
-  React.useEffect(() => {
-    const handle = window.setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(doc));
-      } catch {
-        // ignore
-      }
-    }, 150);
-    return () => window.clearTimeout(handle);
-  }, [doc]);
 
   // Keyboard shortcuts
   React.useEffect(() => {
@@ -717,13 +739,7 @@ export function DocumentEditor({ className }: { className?: string }) {
     const w = viewportSize.width / camera.scale;
     const h = viewportSize.height / camera.scale;
     return `${camera.x} ${camera.y} ${w} ${h}`;
-  }, [
-    camera.scale,
-    camera.x,
-    camera.y,
-    viewportSize.height,
-    viewportSize.width,
-  ]);
+  }, [camera.scale, camera.x, camera.y, viewportSize.height, viewportSize.width]);
 
   const viewportStyle = React.useMemo(() => {
     const grid = 24;
@@ -736,9 +752,7 @@ export function DocumentEditor({ className }: { className?: string }) {
       backgroundImage:
         "linear-gradient(to right, rgba(127,127,127,0.15) 1px, transparent 1px), linear-gradient(to bottom, rgba(127,127,127,0.15) 1px, transparent 1px)",
       backgroundSize: `${grid * camera.scale}px ${grid * camera.scale}px`,
-      backgroundPosition: `${-camera.x * camera.scale}px ${
-        -camera.y * camera.scale
-      }px`,
+      backgroundPosition: `${-camera.x * camera.scale}px ${-camera.y * camera.scale}px`,
     } as React.CSSProperties;
   }, [camera.scale, camera.x, camera.y, doc.canvas.background]);
 
@@ -964,7 +978,7 @@ export function DocumentEditor({ className }: { className?: string }) {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [camera.scale, drag, nodeRegistry]);
+  }, [camera.scale, drag, nodeRegistry, setDoc]);
 
   const onCanvasPointerDown = React.useCallback(
     (e: React.PointerEvent) => {
@@ -993,10 +1007,26 @@ export function DocumentEditor({ className }: { className?: string }) {
         }
 
         const node: DocNode = nodeDef.create({ id, x: point.x, y: point.y });
+        const preset = tool.preset;
+        const nextNode: DocNode = preset
+          ? {
+              ...node,
+              ...(preset.w ? { w: preset.w } : null),
+              ...(preset.h ? { h: preset.h } : null),
+              ...(preset.props
+                ? {
+                    props: {
+                      ...(node.props as Record<string, unknown>),
+                      ...preset.props,
+                    },
+                  }
+                : null),
+            }
+          : node;
 
         setDoc((d) => ({
           ...d,
-          nodes: { ...d.nodes, [id]: node },
+          nodes: { ...d.nodes, [id]: nextNode },
           nodeOrder: [...d.nodeOrder, id],
         }));
         setSelection({ kind: "node", id });
@@ -1018,7 +1048,7 @@ export function DocumentEditor({ className }: { className?: string }) {
         setTool({ kind: "select" });
       }
     },
-    [beginPan, camera, nodeRegistry, spaceDown, tool],
+    [beginPan, camera, nodeRegistry, setDoc, spaceDown, tool],
   );
 
   const onNodeClick = React.useCallback(
@@ -1039,7 +1069,12 @@ export function DocumentEditor({ className }: { className?: string }) {
             arrow: tool.edge.arrow,
             from: tool.fromId,
             to: nodeId,
-            props: { color: "#111827", width: 2, dash: "solid" },
+            props: {
+              color: "#111827",
+              width: 2,
+              dash: "solid",
+              curve: tool.edge.shape === "curve" ? 0.25 : undefined,
+            },
           };
 
           setDoc((d) => ({
@@ -1055,7 +1090,7 @@ export function DocumentEditor({ className }: { className?: string }) {
         setSelection({ kind: "node", id: nodeId });
       }
     },
-    [doc.nodes, tool],
+    [doc.nodes, setDoc, tool],
   );
 
   React.useEffect(() => {
@@ -1092,7 +1127,7 @@ export function DocumentEditor({ className }: { className?: string }) {
           }),
       });
     },
-    [doc.nodes, nodeRegistry],
+    [doc.nodes, nodeRegistry, setDoc],
   );
 
   const docJSON = React.useMemo(() => JSON.stringify(doc, null, 2), [doc]);
@@ -1100,37 +1135,90 @@ export function DocumentEditor({ className }: { className?: string }) {
   const onExport = React.useCallback(async () => {
     try {
       await navigator.clipboard.writeText(docJSON);
-      setJSONSheet((
-        s,
-      ) => (s ? { ...s, error: null } : { mode: "export", error: null }));
+      setJSONSheet((s) => (s ? { ...s, error: null } : { mode: "export", error: null }));
     } catch {
       setJSONSheet((s) =>
         s
           ? {
-            ...s,
-            error:
-              "クリップボードに書き込めませんでした（ブラウザ権限の可能性）",
-          }
+              ...s,
+              error: "クリップボードに書き込めませんでした（ブラウザ権限の可能性）",
+            }
           : {
-            mode: "export",
-            error:
-              "クリップボードに書き込めませんでした（ブラウザ権限の可能性）",
-          }
+              mode: "export",
+              error: "クリップボードに書き込めませんでした（ブラウザ権限の可能性）",
+            },
       );
     }
   }, [docJSON]);
 
-  const onImportConfirm = React.useCallback((value: string) => {
-    const parsed = safeParseDoc(value);
-    if (!parsed.ok) {
-      setJSONSheet({ mode: "import", error: parsed.error });
+  const onImportConfirm = React.useCallback(
+    (value: string) => {
+      const parsed = safeParseDoc(value);
+      if (!parsed.ok) {
+        setJSONSheet({ mode: "import", error: parsed.error });
+        return;
+      }
+      setDoc(parsed.doc);
+      setSelection({ kind: "none" });
+      setTool({ kind: "select" });
+      setJSONSheet(null);
+    },
+    [setDoc],
+  );
+
+  const onMermaidConfirm = React.useCallback(() => {
+    const source = mermaidDraft.trim();
+    if (!source) {
+      setMermaidDialog({ error: "Mermaidコードを入力してください" });
       return;
     }
-    setDoc(parsed.doc);
+
+    const result = buildMermaidElements(source, {
+      existingNodeIds: new Set(Object.keys(doc.nodes)),
+      existingEdgeIds: new Set(Object.keys(doc.edges)),
+      idPrefix: "mmd_",
+    });
+
+    if (result.nodeOrder.length === 0) {
+      setMermaidDialog({ error: "ノードが見つかりませんでした" });
+      return;
+    }
+
+    setDoc((d) => {
+      const nextNodes = { ...d.nodes, ...result.nodes };
+      const nextEdges = { ...d.edges, ...result.edges };
+      const nodeOrder = [...d.nodeOrder, ...result.nodeOrder];
+      const edgeOrder = [...d.edgeOrder, ...result.edgeOrder];
+
+      const bounds = computeBoundsFromNodes(nextNodes);
+      if (!bounds) {
+        return {
+          ...d,
+          nodes: nextNodes,
+          nodeOrder,
+          edges: nextEdges,
+          edgeOrder,
+        };
+      }
+
+      const padding = 200;
+      const nextWidth = Math.max(d.canvas.width, bounds.maxX - bounds.minX + padding * 2);
+      const nextHeight = Math.max(d.canvas.height, bounds.maxY - bounds.minY + padding * 2);
+
+      return {
+        ...d,
+        nodes: nextNodes,
+        nodeOrder,
+        edges: nextEdges,
+        edgeOrder,
+        canvas: { ...d.canvas, width: nextWidth, height: nextHeight },
+      };
+    });
+
     setSelection({ kind: "none" });
     setTool({ kind: "select" });
-    setJSONSheet(null);
-  }, []);
+    setMermaidDialog(null);
+  }, [doc.edges, doc.nodes, mermaidDraft, setDoc]);
 
   const selectedNode = selectedNodeId ? doc.nodes[selectedNodeId] : null;
   const selectedEdge = selectedEdgeId ? doc.edges[selectedEdgeId] : null;
@@ -1177,7 +1265,7 @@ export function DocumentEditor({ className }: { className?: string }) {
       });
       setSelection({ kind: "none" });
     }
-  }, [selection]);
+  }, [selection, setDoc]);
 
   const renderMenuEntries = React.useCallback(
     function renderMenuEntries(entries: Array<MenuEntry>, keyPrefix: string) {
@@ -1190,9 +1278,7 @@ export function DocumentEditor({ className }: { className?: string }) {
           const key = entry.id ?? `${keyPrefix}-submenu-${i}`;
           return (
             <MenubarSub key={key}>
-              <MenubarSubTrigger disabled={entry.disabled}>
-                {entry.label}
-              </MenubarSubTrigger>
+              <MenubarSubTrigger disabled={entry.disabled}>{entry.label}</MenubarSubTrigger>
               <MenubarSubContent>
                 {renderMenuEntries(entry.entries, `${keyPrefix}-${key}`)}
               </MenubarSubContent>
@@ -1212,9 +1298,7 @@ export function DocumentEditor({ className }: { className?: string }) {
             disabled={entry.disabled}
           >
             {entry.label}
-            {entry.shortcut
-              ? <MenubarShortcut>{entry.shortcut}</MenubarShortcut>
-              : null}
+            {entry.shortcut ? <MenubarShortcut>{entry.shortcut}</MenubarShortcut> : null}
           </MenubarItem>
         );
       });
@@ -1222,17 +1306,17 @@ export function DocumentEditor({ className }: { className?: string }) {
     [executeCommand],
   );
 
+  if (!activeDoc) {
+    return null;
+  }
+
   return (
-    <div
-      className={cn("flex h-full min-h-0 w-full min-w-0 flex-col", className)}
-    >
+    <div className={cn("flex h-full min-h-0 w-full min-w-0 flex-col", className)}>
       <div className="flex flex-wrap items-center gap-2 border-b bg-background px-3 py-2">
         <Menubar className="h-9">
           <MenubarMenu>
             <MenubarTrigger>追加</MenubarTrigger>
-            <MenubarContent>
-              {renderMenuEntries(addMenuEntries, "add")}
-            </MenubarContent>
+            <MenubarContent>{renderMenuEntries(addMenuEntries, "add")}</MenubarContent>
           </MenubarMenu>
 
           <MenubarMenu>
@@ -1244,7 +1328,7 @@ export function DocumentEditor({ className }: { className?: string }) {
               <MenubarItem
                 variant="destructive"
                 onSelect={() => {
-                  setDoc(defaultDoc());
+                  setDoc(createDefaultDocument(doc.title || "ドキュメント"));
                   setSelection({ kind: "none" });
                   setTool({ kind: "select" });
                   setCamera({ x: 0, y: 0, scale: 1 });
@@ -1257,16 +1341,12 @@ export function DocumentEditor({ className }: { className?: string }) {
 
           <MenubarMenu>
             <MenubarTrigger>編集</MenubarTrigger>
-            <MenubarContent>
-              {renderMenuEntries(editMenuEntries, "edit")}
-            </MenubarContent>
+            <MenubarContent>{renderMenuEntries(editMenuEntries, "edit")}</MenubarContent>
           </MenubarMenu>
 
           <MenubarMenu>
             <MenubarTrigger>表示</MenubarTrigger>
-            <MenubarContent>
-              {renderMenuEntries(viewMenuEntries, "view")}
-            </MenubarContent>
+            <MenubarContent>{renderMenuEntries(viewMenuEntries, "view")}</MenubarContent>
           </MenubarMenu>
         </Menubar>
 
@@ -1278,39 +1358,29 @@ export function DocumentEditor({ className }: { className?: string }) {
           >
             選択
           </Button>
-          {tool.kind === "add"
-            ? <div className="text-xs text-muted-foreground">配置モード</div>
-            : null}
-          {tool.kind === "connect"
-            ? <div className="text-xs text-muted-foreground">接続モード</div>
-            : null}
+          {tool.kind === "add" ? (
+            <div className="text-xs text-muted-foreground">配置モード</div>
+          ) : null}
+          {tool.kind === "connect" ? (
+            <div className="text-xs text-muted-foreground">接続モード</div>
+          ) : null}
         </div>
 
         <div className="ml-auto flex items-center gap-2">
           <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => zoomToCentered(camera.scale - 0.1)}
-            >
+            <Button size="sm" variant="outline" onClick={() => zoomToCentered(camera.scale - 0.1)}>
               −
             </Button>
             <div className="min-w-14 text-center text-xs tabular-nums">
               {Math.round(camera.scale * 100)}%
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => zoomToCentered(camera.scale + 0.1)}
-            >
+            <Button size="sm" variant="outline" onClick={() => zoomToCentered(camera.scale + 0.1)}>
               ＋
             </Button>
           </div>
 
           <div className="text-xs text-muted-foreground">
-            {spaceDown
-              ? "パン: Space+ドラッグ"
-              : "パン: Space+ドラッグ / 中クリック"}
+            {spaceDown ? "パン: Space+ドラッグ" : "パン: Space+ドラッグ / 中クリック"}
           </div>
         </div>
       </div>
@@ -1320,14 +1390,6 @@ export function DocumentEditor({ className }: { className?: string }) {
           ref={viewportRef}
           className="relative min-h-0 flex-1 overflow-hidden bg-background"
           style={viewportStyle}
-          onWheel={(e) => {
-            // Prevent page scroll
-            e.preventDefault();
-            const delta = e.deltaY;
-            // Smooth & slower zoom: exponential mapping
-            const zoomFactor = Math.exp(-delta * 0.0012);
-            zoomToAtClient(camera.scale * zoomFactor, e.clientX, e.clientY);
-          }}
           onPointerMove={(e) => {
             if (tool.kind !== "connect" || !tool.fromId) return;
             if (!viewportRef.current) return;
@@ -1335,11 +1397,7 @@ export function DocumentEditor({ className }: { className?: string }) {
             setConnectPreview(p);
           }}
         >
-          <div
-            className="absolute inset-0"
-            onPointerDown={onCanvasPointerDown}
-            aria-label="canvas"
-          >
+          <div className="absolute inset-0" onPointerDown={onCanvasPointerDown} aria-label="canvas">
             <svg
               className="absolute inset-0"
               width="100%"
@@ -1380,31 +1438,32 @@ export function DocumentEditor({ className }: { className?: string }) {
                 if (!fromNode || !toNode) return null;
 
                 const path = computeEdgePath(edge, fromNode, toNode);
-                const strokeDasharray = edge.props.dash === "dashed"
-                  ? "8 6"
-                  : undefined;
-                const markerEnd = edge.arrow === "end" || edge.arrow === "both"
-                  ? "url(#arrow-end)"
-                  : undefined;
-                const markerStart = edge.arrow === "both"
-                  ? "url(#arrow-start)"
-                  : undefined;
+                const strokeDasharray = edge.props.dash === "dashed" ? "8 6" : undefined;
+                const markerEnd =
+                  edge.arrow === "end" || edge.arrow === "both" ? "url(#arrow-end)" : undefined;
+                const markerStart = edge.arrow === "both" ? "url(#arrow-start)" : undefined;
                 const selected = selectedEdgeId === edgeId;
+                const labelText = edge.props.label?.trim();
+                const labelPos = labelText
+                  ? computeEdgeLabelPosition(edge, fromNode, toNode)
+                  : null;
+                const labelWidth = labelText
+                  ? Math.min(240, Math.max(44, labelText.length * 7 + 16))
+                  : 0;
+                const labelHeight = labelText ? 24 : 0;
 
                 return (
                   <g key={edgeId}>
-                    {selected
-                      ? (
-                        <path
-                          d={path}
-                          fill="none"
-                          stroke="rgba(99, 102, 241, 0.90)"
-                          strokeWidth={edge.props.width + 5}
-                          strokeDasharray={strokeDasharray}
-                          style={{ pointerEvents: "none" }}
-                        />
-                      )
-                      : null}
+                    {selected ? (
+                      <path
+                        d={path}
+                        fill="none"
+                        stroke="rgba(99, 102, 241, 0.90)"
+                        strokeWidth={edge.props.width + 5}
+                        strokeDasharray={strokeDasharray}
+                        style={{ pointerEvents: "none" }}
+                      />
+                    ) : null}
 
                     <path
                       d={path}
@@ -1421,25 +1480,46 @@ export function DocumentEditor({ className }: { className?: string }) {
                         setSelection({ kind: "edge", id: edgeId });
                       }}
                     />
+
+                    {labelText && labelPos ? (
+                      <g style={{ pointerEvents: "none" }}>
+                        <rect
+                          x={labelPos.x - labelWidth / 2}
+                          y={labelPos.y - labelHeight / 2}
+                          width={labelWidth}
+                          height={labelHeight}
+                          rx={6}
+                          fill="var(--background)"
+                          stroke="var(--border)"
+                        />
+                        <text
+                          x={labelPos.x}
+                          y={labelPos.y + 4}
+                          textAnchor="middle"
+                          fontSize={12}
+                          fill="var(--foreground)"
+                        >
+                          {labelText}
+                        </text>
+                      </g>
+                    ) : null}
                   </g>
                 );
               })}
 
               {tool.kind === "connect" && tool.fromId && connectPreview
-                ? (
-                  (() => {
+                ? (() => {
                     const fromNode = doc.nodes[tool.fromId];
                     if (!fromNode) return null;
-                    const a = getNodeCenter(fromNode);
                     const b = connectPreview;
-                    const d = computeEdgePathFromPoints(tool.edge.shape, a, b);
+                    const start = getNodeConnectionPoint(fromNode, b);
+                    const d = computeEdgePathFromPoints(tool.edge.shape, start, b, 0.25);
                     const markerEnd =
                       tool.edge.arrow === "end" || tool.edge.arrow === "both"
                         ? "url(#arrow-end)"
                         : undefined;
-                    const markerStart = tool.edge.arrow === "both"
-                      ? "url(#arrow-start)"
-                      : undefined;
+                    const markerStart =
+                      tool.edge.arrow === "both" ? "url(#arrow-start)" : undefined;
                     return (
                       <path
                         d={d}
@@ -1453,7 +1533,6 @@ export function DocumentEditor({ className }: { className?: string }) {
                       />
                     );
                   })()
-                )
                 : null}
             </svg>
 
@@ -1512,165 +1591,158 @@ export function DocumentEditor({ className }: { className?: string }) {
           </div>
         </div>
 
-        <div className="hidden w-[320px] shrink-0 border-l bg-background p-3 md:block">
-          <div className="text-sm font-semibold">プロパティ</div>
+        {selectedNode ? (
+          <div className="hidden w-[320px] shrink-0 border-l bg-background p-3 md:block">
+            <div className="text-sm font-semibold">プロパティ</div>
 
-          <div className="mt-3 text-xs text-muted-foreground">
-            クリックで選択、ドラッグで移動、右下ハンドルでリサイズ。\nダブルクリックでテキスト/画像URLを編集。\n関係(矢印)は「関係ツール→始点ノード→終点ノード」。
-          </div>
-
-          <div className="mt-4">
-            <div className="text-xs font-medium text-muted-foreground">
-              選択
+            <div className="mt-3 text-xs text-muted-foreground">
+              クリックで選択、ドラッグで移動、右下ハンドルでリサイズ。
+              <br />
+              ダブルクリックでテキスト/画像URLを編集。
+              <br />
+              関係(矢印)は「関係ツール→始点ノード→終点ノード」。
             </div>
-            <div className="mt-1 text-sm">
-              {selection.kind === "none" && "なし"}
-              {selection.kind === "node" && `ノード: ${selection.id}`}
-              {selection.kind === "edge" && `関係: ${selection.id}`}
+
+            <div className="mt-4">
+              <div className="text-xs font-medium text-muted-foreground">選択</div>
+              <div className="mt-1 text-sm">
+                {selection.kind === "none" && "なし"}
+                {selection.kind === "node" && `ノード: ${selection.id}`}
+                {selection.kind === "edge" && `関係: ${selection.id}`}
+              </div>
             </div>
-          </div>
 
-          {selectedNode
-            ? (
-              <div className="mt-4 space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <InputGroup label="X">
-                    <Input
-                      inputMode="numeric"
-                      value={String(Math.round(selectedNode.x))}
-                      onChange={(e) => {
-                        const next = Number(e.target.value);
-                        if (!Number.isFinite(next)) return;
-                        setDoc((d) => ({
-                          ...d,
-                          nodes: {
-                            ...d.nodes,
-                            [selectedNode.id]: { ...selectedNode, x: next },
+            <div className="mt-4 space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <InputGroup label="X">
+                  <Input
+                    inputMode="numeric"
+                    value={String(Math.round(selectedNode.x))}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      if (!Number.isFinite(next)) return;
+                      setDoc((d) => ({
+                        ...d,
+                        nodes: {
+                          ...d.nodes,
+                          [selectedNode.id]: { ...selectedNode, x: next },
+                        },
+                      }));
+                    }}
+                  />
+                </InputGroup>
+                <InputGroup label="Y">
+                  <Input
+                    inputMode="numeric"
+                    value={String(Math.round(selectedNode.y))}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      if (!Number.isFinite(next)) return;
+                      setDoc((d) => ({
+                        ...d,
+                        nodes: {
+                          ...d.nodes,
+                          [selectedNode.id]: { ...selectedNode, y: next },
+                        },
+                      }));
+                    }}
+                  />
+                </InputGroup>
+                <InputGroup label="W">
+                  <Input
+                    inputMode="numeric"
+                    value={String(Math.round(selectedNode.w))}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      if (!Number.isFinite(next)) return;
+                      setDoc((d) => ({
+                        ...d,
+                        nodes: {
+                          ...d.nodes,
+                          [selectedNode.id]: {
+                            ...selectedNode,
+                            w: clamp(next, 24, 3200),
                           },
-                        }));
-                      }}
-                    />
-                  </InputGroup>
-                  <InputGroup label="Y">
-                    <Input
-                      inputMode="numeric"
-                      value={String(Math.round(selectedNode.y))}
-                      onChange={(e) => {
-                        const next = Number(e.target.value);
-                        if (!Number.isFinite(next)) return;
-                        setDoc((d) => ({
-                          ...d,
-                          nodes: {
-                            ...d.nodes,
-                            [selectedNode.id]: { ...selectedNode, y: next },
+                        },
+                      }));
+                    }}
+                  />
+                </InputGroup>
+                <InputGroup label="H">
+                  <Input
+                    inputMode="numeric"
+                    value={String(Math.round(selectedNode.h))}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      if (!Number.isFinite(next)) return;
+                      setDoc((d) => ({
+                        ...d,
+                        nodes: {
+                          ...d.nodes,
+                          [selectedNode.id]: {
+                            ...selectedNode,
+                            h: clamp(next, 24, 3200),
                           },
-                        }));
-                      }}
-                    />
-                  </InputGroup>
-                  <InputGroup label="W">
-                    <Input
-                      inputMode="numeric"
-                      value={String(Math.round(selectedNode.w))}
-                      onChange={(e) => {
-                        const next = Number(e.target.value);
-                        if (!Number.isFinite(next)) return;
-                        setDoc((d) => ({
-                          ...d,
-                          nodes: {
-                            ...d.nodes,
-                            [selectedNode.id]: {
-                              ...selectedNode,
-                              w: clamp(next, 24, 3200),
-                            },
-                          },
-                        }));
-                      }}
-                    />
-                  </InputGroup>
-                  <InputGroup label="H">
-                    <Input
-                      inputMode="numeric"
-                      value={String(Math.round(selectedNode.h))}
-                      onChange={(e) => {
-                        const next = Number(e.target.value);
-                        if (!Number.isFinite(next)) return;
-                        setDoc((d) => ({
-                          ...d,
-                          nodes: {
-                            ...d.nodes,
-                            [selectedNode.id]: {
-                              ...selectedNode,
-                              h: clamp(next, 24, 3200),
-                            },
-                          },
-                        }));
-                      }}
-                    />
-                  </InputGroup>
-                </div>
+                        },
+                      }));
+                    }}
+                  />
+                </InputGroup>
+              </div>
 
-                {(() => {
-                  const nodeDef = nodeRegistry.get(selectedNode.type);
-                  if (!nodeDef?.inspector) return null;
-                  return nodeDef.inspector({
-                    node: selectedNode as never,
-                    updateNode: (updater) =>
-                      setDoc((d) => {
-                        const cur = d.nodes[selectedNode.id];
-                        if (!cur) return d;
-                        return {
-                          ...d,
-                          nodes: {
-                            ...d.nodes,
-                            [selectedNode.id]: updater(cur as never) as DocNode,
-                          },
-                        };
-                      }),
-                  });
-                })()}
-
-                <Button
-                  variant="destructive"
-                  onClick={() => {
+              {(() => {
+                const nodeDef = nodeRegistry.get(selectedNode.type);
+                if (!nodeDef?.inspector) return null;
+                return nodeDef.inspector({
+                  node: selectedNode as never,
+                  updateNode: (updater) =>
                     setDoc((d) => {
-                      const nextNodes = { ...d.nodes };
-                      delete nextNodes[selectedNode.id];
-
-                      const nextEdges: Record<string, DocEdge> = {};
-                      const nextEdgeOrder: string[] = [];
-                      for (const edgeId of d.edgeOrder) {
-                        const edge = d.edges[edgeId];
-                        if (!edge) continue;
-                        if (
-                          edge.from === selectedNode.id ||
-                          edge.to === selectedNode.id
-                        ) continue;
-                        nextEdges[edgeId] = edge;
-                        nextEdgeOrder.push(edgeId);
-                      }
-
+                      const cur = d.nodes[selectedNode.id];
+                      if (!cur) return d;
                       return {
                         ...d,
-                        nodes: nextNodes,
-                        nodeOrder: d.nodeOrder.filter((x) =>
-                          x !== selectedNode.id
-                        ),
-                        edges: nextEdges,
-                        edgeOrder: nextEdgeOrder,
+                        nodes: {
+                          ...d.nodes,
+                          [selectedNode.id]: updater(cur as never) as DocNode,
+                        },
                       };
-                    });
-                    setSelection({ kind: "none" });
-                  }}
-                >
-                  ノード削除
-                </Button>
-              </div>
-            )
-            : null}
+                    }),
+                });
+              })()}
 
-          {selectedEdge
-            ? (
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  setDoc((d) => {
+                    const nextNodes = { ...d.nodes };
+                    delete nextNodes[selectedNode.id];
+
+                    const nextEdges: Record<string, DocEdge> = {};
+                    const nextEdgeOrder: string[] = [];
+                    for (const edgeId of d.edgeOrder) {
+                      const edge = d.edges[edgeId];
+                      if (!edge) continue;
+                      if (edge.from === selectedNode.id || edge.to === selectedNode.id) continue;
+                      nextEdges[edgeId] = edge;
+                      nextEdgeOrder.push(edgeId);
+                    }
+
+                    return {
+                      ...d,
+                      nodes: nextNodes,
+                      nodeOrder: d.nodeOrder.filter((x) => x !== selectedNode.id),
+                      edges: nextEdges,
+                      edgeOrder: nextEdgeOrder,
+                    };
+                  });
+                  setSelection({ kind: "none" });
+                }}
+              >
+                ノード削除
+              </Button>
+            </div>
+
+            {selectedEdge ? (
               <div className="mt-4 space-y-3">
                 <div className="text-sm font-semibold">関係プロパティ</div>
 
@@ -1678,9 +1750,7 @@ export function DocumentEditor({ className }: { className?: string }) {
                   <div className="flex flex-wrap gap-1">
                     <Button
                       size="sm"
-                      variant={selectedEdge.shape === "line"
-                        ? "default"
-                        : "outline"}
+                      variant={selectedEdge.shape === "line" ? "default" : "outline"}
                       onClick={() =>
                         setDoc((d) => ({
                           ...d,
@@ -1691,15 +1761,14 @@ export function DocumentEditor({ className }: { className?: string }) {
                               shape: "line",
                             },
                           },
-                        }))}
+                        }))
+                      }
                     >
                       直線
                     </Button>
                     <Button
                       size="sm"
-                      variant={selectedEdge.shape === "curve"
-                        ? "default"
-                        : "outline"}
+                      variant={selectedEdge.shape === "curve" ? "default" : "outline"}
                       onClick={() =>
                         setDoc((d) => ({
                           ...d,
@@ -1710,7 +1779,8 @@ export function DocumentEditor({ className }: { className?: string }) {
                               shape: "curve",
                             },
                           },
-                        }))}
+                        }))
+                      }
                     >
                       曲線
                     </Button>
@@ -1721,9 +1791,7 @@ export function DocumentEditor({ className }: { className?: string }) {
                   <div className="flex flex-wrap gap-1">
                     <Button
                       size="sm"
-                      variant={selectedEdge.arrow === "none"
-                        ? "default"
-                        : "outline"}
+                      variant={selectedEdge.arrow === "none" ? "default" : "outline"}
                       onClick={() =>
                         setDoc((d) => ({
                           ...d,
@@ -1734,15 +1802,14 @@ export function DocumentEditor({ className }: { className?: string }) {
                               arrow: "none",
                             },
                           },
-                        }))}
+                        }))
+                      }
                     >
                       なし
                     </Button>
                     <Button
                       size="sm"
-                      variant={selectedEdge.arrow === "end"
-                        ? "default"
-                        : "outline"}
+                      variant={selectedEdge.arrow === "end" ? "default" : "outline"}
                       onClick={() =>
                         setDoc((d) => ({
                           ...d,
@@ -1753,15 +1820,14 @@ export function DocumentEditor({ className }: { className?: string }) {
                               arrow: "end",
                             },
                           },
-                        }))}
+                        }))
+                      }
                     >
                       方
                     </Button>
                     <Button
                       size="sm"
-                      variant={selectedEdge.arrow === "both"
-                        ? "default"
-                        : "outline"}
+                      variant={selectedEdge.arrow === "both" ? "default" : "outline"}
                       onClick={() =>
                         setDoc((d) => ({
                           ...d,
@@ -1772,12 +1838,48 @@ export function DocumentEditor({ className }: { className?: string }) {
                               arrow: "both",
                             },
                           },
-                        }))}
+                        }))
+                      }
                     >
                       両
                     </Button>
                   </div>
                 </InputGroup>
+
+                {selectedEdge.shape === "curve" ? (
+                  <InputGroup label="曲率">
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="range"
+                        min={0.05}
+                        max={0.6}
+                        step={0.01}
+                        value={selectedEdge.props.curve ?? 0.25}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          if (!Number.isFinite(next)) return;
+                          setDoc((d) => ({
+                            ...d,
+                            edges: {
+                              ...d.edges,
+                              [selectedEdge.id]: {
+                                ...selectedEdge,
+                                props: {
+                                  ...selectedEdge.props,
+                                  curve: clamp(next, 0.05, 0.6),
+                                },
+                              },
+                            },
+                          }));
+                        }}
+                        className="w-full accent-foreground"
+                      />
+                      <div className="w-12 text-right text-xs tabular-nums text-muted-foreground">
+                        {(selectedEdge.props.curve ?? 0.25).toFixed(2)}
+                      </div>
+                    </div>
+                  </InputGroup>
+                ) : null}
 
                 <div className="grid grid-cols-2 gap-2">
                   <InputGroup label="太さ">
@@ -1807,9 +1909,7 @@ export function DocumentEditor({ className }: { className?: string }) {
                     <div className="flex gap-1">
                       <Button
                         size="sm"
-                        variant={selectedEdge.props.dash !== "dashed"
-                          ? "default"
-                          : "outline"}
+                        variant={selectedEdge.props.dash !== "dashed" ? "default" : "outline"}
                         onClick={() =>
                           setDoc((d) => ({
                             ...d,
@@ -1820,15 +1920,14 @@ export function DocumentEditor({ className }: { className?: string }) {
                                 props: { ...selectedEdge.props, dash: "solid" },
                               },
                             },
-                          }))}
+                          }))
+                        }
                       >
                         実線
                       </Button>
                       <Button
                         size="sm"
-                        variant={selectedEdge.props.dash === "dashed"
-                          ? "default"
-                          : "outline"}
+                        variant={selectedEdge.props.dash === "dashed" ? "default" : "outline"}
                         onClick={() =>
                           setDoc((d) => ({
                             ...d,
@@ -1842,7 +1941,8 @@ export function DocumentEditor({ className }: { className?: string }) {
                                 },
                               },
                             },
-                          }))}
+                          }))
+                        }
                       >
                         破線
                       </Button>
@@ -1855,8 +1955,7 @@ export function DocumentEditor({ className }: { className?: string }) {
                     <Input
                       type="color"
                       className="h-9 w-14 p-1"
-                      value={normalizeHexColor(selectedEdge.props.color) ??
-                        "#111827"}
+                      value={normalizeHexColor(selectedEdge.props.color) ?? "#111827"}
                       onChange={(e) => {
                         const next = e.target.value;
                         setDoc((d) => ({
@@ -1872,28 +1971,48 @@ export function DocumentEditor({ className }: { className?: string }) {
                       }}
                     />
                     <div className="text-xs text-muted-foreground tabular-nums">
-                      {normalizeHexColor(selectedEdge.props.color) ??
-                        selectedEdge.props.color}
+                      {normalizeHexColor(selectedEdge.props.color) ?? selectedEdge.props.color}
                     </div>
                   </div>
+                </InputGroup>
+
+                <InputGroup label="ラベル">
+                  <Input
+                    placeholder="関係ラベル"
+                    value={selectedEdge.props.label ?? ""}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setDoc((d) => ({
+                        ...d,
+                        edges: {
+                          ...d.edges,
+                          [selectedEdge.id]: {
+                            ...selectedEdge,
+                            props: {
+                              ...selectedEdge.props,
+                              label: next.trim() ? next : undefined,
+                            },
+                          },
+                        },
+                      }));
+                    }}
+                  />
                 </InputGroup>
 
                 <Button variant="destructive" onClick={() => deleteSelected()}>
                   関係削除
                 </Button>
               </div>
-            )
-            : null}
+            ) : null}
 
-          <div className="mt-6">
-            <div className="text-xs font-medium text-muted-foreground">
-              JSON
-            </div>
-            <div className="mt-1 text-xs text-muted-foreground">
-              保存はlocalStorage（暫定）。Cmd/Ctrl+Sで書き出し。
+            <div className="mt-6">
+              <div className="text-xs font-medium text-muted-foreground">JSON</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                保存はlocalStorage（暫定）。Cmd/Ctrl+Sで書き出し。
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       <JSONSheet
@@ -1913,6 +2032,51 @@ export function DocumentEditor({ className }: { className?: string }) {
           onImportConfirm(jsonDraft);
         }}
       />
+
+      <Dialog
+        open={mermaidDialog != null}
+        onOpenChange={(open) => {
+          if (!open) setMermaidDialog(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-[720px]">
+          <DialogHeader>
+            <DialogTitle>Mermaid読み込み</DialogTitle>
+            <DialogDescription>
+              Mermaidコードを貼り付けてノードと関係を追加します。
+            </DialogDescription>
+          </DialogHeader>
+
+          <InputGroup
+            label={<Label htmlFor="mermaid-input">Mermaidコード</Label>}
+            description="flowchart / graph / mindmap 記法に対応"
+          >
+            <textarea
+              id="mermaid-input"
+              className="h-56 w-full resize-none rounded-md border bg-background p-3 font-mono text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
+              value={mermaidDraft}
+              onChange={(e) => {
+                setMermaidDraft(e.target.value);
+                if (mermaidDialog?.error) {
+                  setMermaidDialog({ error: null });
+                }
+              }}
+              placeholder="flowchart TD\n  A --> B"
+            />
+          </InputGroup>
+
+          {mermaidDialog?.error ? (
+            <div className="text-sm text-destructive">{mermaidDialog.error}</div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMermaidDialog(null)}>
+              キャンセル
+            </Button>
+            <Button onClick={onMermaidConfirm}>読み込み</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

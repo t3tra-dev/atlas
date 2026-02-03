@@ -1,12 +1,7 @@
 import type { BasePlugin } from "@/plugin";
 
 import { builtinCommands, builtinKeybindings } from "./commands";
-import {
-  builtinAddMenu,
-  builtinEditMenu,
-  builtinFileMenu,
-  builtinViewMenu,
-} from "./menus";
+import { builtinAddMenu, builtinEditMenu, builtinFileMenu, builtinViewMenu } from "./menus";
 import { builtinNodes } from "./nodes";
 
 export const BuiltinPlugin: BasePlugin = {

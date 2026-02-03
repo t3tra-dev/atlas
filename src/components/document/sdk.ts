@@ -2,13 +2,7 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-import type {
-  Camera,
-  DocumentModel,
-  DocNode,
-  Selection,
-  Tool,
-} from "@/components/document/model";
+import type { Camera, DocumentModel, DocNode, Selection, Tool } from "@/components/document/model";
 
 export type JSONSheetMode = "export" | "import";
 
@@ -54,6 +48,7 @@ export interface NodeRenderResult {
   className?: string;
   style?: React.CSSProperties;
   children?: React.ReactNode;
+  suppressSelectionRing?: boolean;
 }
 
 export interface RenderNodeContext {
@@ -102,6 +97,7 @@ export interface DocumentSDK {
    */
   ui: {
     openJSONSheet: (mode: JSONSheetMode) => void;
+    openMermaidImportDialog: () => void;
   };
 
   doc: DocumentAPI;
@@ -115,11 +111,15 @@ const noopUi: DocumentSDK["ui"] = {
   openJSONSheet: () => {
     // no-op (useful for tests or non-editor contexts)
   },
+  openMermaidImportDialog: () => {
+    // no-op
+  },
 };
 
 const noopDoc: DocumentAPI = {
   get: () => ({
     version: 1,
+    title: "Untitled",
     canvas: { width: 1920, height: 1080, background: "grid" },
     nodes: {},
     nodeOrder: [],

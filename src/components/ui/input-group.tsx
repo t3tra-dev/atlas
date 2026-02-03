@@ -1,6 +1,6 @@
-import * as React from "react"
+import * as React from "react";
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/utils";
 
 function InputGroup({
   className,
@@ -9,8 +9,8 @@ function InputGroup({
   children,
   ...props
 }: React.ComponentProps<"div"> & {
-  label?: React.ReactNode
-  description?: React.ReactNode
+  label?: React.ReactNode;
+  description?: React.ReactNode;
 }) {
   return (
     <div data-slot="input-group" className={cn("space-y-1", className)} {...props}>
@@ -22,7 +22,7 @@ function InputGroup({
       ) : null}
       <div>{children}</div>
     </div>
-  )
+  );
 }
 
-export { InputGroup }
+export { InputGroup };

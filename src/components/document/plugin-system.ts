@@ -30,10 +30,7 @@ export interface PluginHost {
   keybindings: Array<KeybindingContribution>;
 }
 
-export function createPluginHost(
-  plugins: Array<BasePlugin>,
-  ctx: PluginContext,
-): PluginHost {
+export function createPluginHost(plugins: Array<BasePlugin>, ctx: PluginContext): PluginHost {
   const nodeMap = new Map<string, NodeTypeDef>();
   const addMenu: Array<MenuEntry> = [];
   const fileMenu: Array<MenuEntry> = [];
@@ -46,9 +43,7 @@ export function createPluginHost(
     const c = plugin.register(ctx);
     for (const nodeDef of c.nodes ?? []) {
       if (nodeMap.has(nodeDef.type)) {
-        throw new Error(
-          `Duplicate node type '${nodeDef.type}' registered by '${plugin.id}'.`,
-        );
+        throw new Error(`Duplicate node type '${nodeDef.type}' registered by '${plugin.id}'.`);
       }
       nodeMap.set(nodeDef.type, nodeDef);
     }
@@ -71,9 +66,7 @@ export function createPluginHost(
 
     for (const cmd of c.commands ?? []) {
       if (commandMap.has(cmd.id)) {
-        throw new Error(
-          `Duplicate command '${cmd.id}' registered by '${plugin.id}'.`,
-        );
+        throw new Error(`Duplicate command '${cmd.id}' registered by '${plugin.id}'.`);
       }
       commandMap.set(cmd.id, cmd);
     }

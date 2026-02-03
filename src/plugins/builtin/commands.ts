@@ -1,8 +1,4 @@
-import type {
-  CommandContribution,
-  KeybindingContribution,
-  PluginContext,
-} from "@/plugin";
+import type { CommandContribution, KeybindingContribution, PluginContext } from "@/plugin";
 import type { DocEdge, DocumentModel, Selection } from "@/components/document/model";
 import type { NodeTypeDef } from "@/components/document/sdk";
 
@@ -49,6 +45,7 @@ function deleteSelectedFromDoc(doc: DocumentModel, selection: Selection) {
 export const BUILTIN_COMMANDS = {
   fileExportJSON: "file.exportJSON",
   fileImportJSON: "file.importJSON",
+  fileImportMermaid: "file.importMermaid",
   editDeleteSelected: "edit.deleteSelected",
   editClearSelection: "edit.clearSelection",
   viewZoomIn: "view.zoomIn",
@@ -62,6 +59,18 @@ export const BUILTIN_COMMANDS = {
   addConnectCurveNone: "add.connect.curve.none",
   addConnectCurveEnd: "add.connect.curve.end",
   addConnectCurveBoth: "add.connect.curve.both",
+
+  addShapeRect: "add.shape.rect",
+  addShapeCircle: "add.shape.circle",
+  addShapeDiamond: "add.shape.diamond",
+  addShapeStadium: "add.shape.stadium",
+  addShapeHexagon: "add.shape.hexagon",
+  addShapeParallelogram: "add.shape.parallelogram",
+  addShapeTrapezoid: "add.shape.trapezoid",
+  addShapeInvTrapezoid: "add.shape.invtrapezoid",
+  addShapeSubroutine: "add.shape.subroutine",
+  addShapeCylinder: "add.shape.cylinder",
+  addShapeDoubleCircle: "add.shape.doublecircle",
 } as const;
 
 export function builtinAddNodeCommandId(nodeType: string) {
@@ -78,8 +87,122 @@ export function builtinCommands(
     run: () => ctx.sdk.tool.set({ kind: "add", nodeType: d.type }),
   }));
 
+  const shapeCommands: Array<CommandContribution> = [
+    {
+      id: BUILTIN_COMMANDS.addShapeRect,
+      title: "追加: 四角形",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "rect" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeStadium,
+      title: "追加: スタジアム",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "stadium" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeCircle,
+      title: "追加: 円",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "circle" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeDoubleCircle,
+      title: "追加: 二重円",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "doublecircle" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeDiamond,
+      title: "追加: ダイヤ",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "diamond" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeHexagon,
+      title: "追加: 六角形",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "hexagon" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeParallelogram,
+      title: "追加: 平行四辺形",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "parallelogram" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeTrapezoid,
+      title: "追加: 台形",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "trapezoid" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeInvTrapezoid,
+      title: "追加: 逆台形",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "invtrapezoid" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeSubroutine,
+      title: "追加: サブルーチン",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "subroutine" } },
+        }),
+    },
+    {
+      id: BUILTIN_COMMANDS.addShapeCylinder,
+      title: "追加: データベース",
+      run: () =>
+        ctx.sdk.tool.set({
+          kind: "add",
+          nodeType: "shape",
+          preset: { props: { shape: "cylinder" } },
+        }),
+    },
+  ];
+
   return [
     ...nodeCommands,
+    ...shapeCommands,
     {
       id: BUILTIN_COMMANDS.fileExportJSON,
       title: "JSON書き出し",
@@ -89,6 +212,13 @@ export function builtinCommands(
       id: BUILTIN_COMMANDS.fileImportJSON,
       title: "JSON読み込み",
       run: () => ctx.sdk.ui.openJSONSheet("import"),
+    },
+    {
+      id: BUILTIN_COMMANDS.fileImportMermaid,
+      title: "Mermaid読み込み",
+      run: () => {
+        ctx.sdk.ui.openMermaidImportDialog();
+      },
     },
     {
       id: BUILTIN_COMMANDS.editDeleteSelected,

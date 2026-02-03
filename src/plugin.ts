@@ -8,27 +8,27 @@ export type MenuItemVariant = "default" | "destructive";
 
 export type MenuEntry =
   | {
-    kind: "item";
-    id?: string;
-    label: string;
-    shortcut?: string;
-    variant?: MenuItemVariant;
-    disabled?: boolean;
-    /** Execute a command when selected (preferred). */
-    command?: string;
-    /** Legacy: direct handler (will be called if provided). */
-    onSelect?: () => void;
-  }
+      kind: "item";
+      id?: string;
+      label: string;
+      shortcut?: string;
+      variant?: MenuItemVariant;
+      disabled?: boolean;
+      /** Execute a command when selected (preferred). */
+      command?: string;
+      /** Legacy: direct handler (will be called if provided). */
+      onSelect?: () => void;
+    }
   | {
-    kind: "submenu";
-    id?: string;
-    label: string;
-    disabled?: boolean;
-    entries: Array<MenuEntry>;
-  }
+      kind: "submenu";
+      id?: string;
+      label: string;
+      disabled?: boolean;
+      entries: Array<MenuEntry>;
+    }
   | {
-    kind: "separator";
-  };
+      kind: "separator";
+    };
 
 export interface MenuContribution {
   add?: Array<MenuEntry>;
