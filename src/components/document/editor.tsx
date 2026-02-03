@@ -1222,6 +1222,7 @@ export function DocumentEditor({ className }: { className?: string }) {
 
   const selectedNode = selectedNodeId ? doc.nodes[selectedNodeId] : null;
   const selectedEdge = selectedEdgeId ? doc.edges[selectedEdgeId] : null;
+  const hasSelection = Boolean(selectedNode || selectedEdge);
 
   const deleteSelected = React.useCallback(() => {
     if (selection.kind === "node") {
@@ -1591,17 +1592,23 @@ export function DocumentEditor({ className }: { className?: string }) {
           </div>
         </div>
 
-        {selectedNode ? (
-          <div className="hidden w-[320px] shrink-0 border-l bg-background p-3 md:block">
+        {
+          <div
+            className={`hidden w-[320px] shrink-0 border-l bg-background p-3 md:block${
+              hasSelection ? "" : " invisible pointer-events-none"
+            }`}
+          >
             <div className="text-sm font-semibold">プロパティ</div>
 
-            <div className="mt-3 text-xs text-muted-foreground">
-              クリックで選択、ドラッグで移動、右下ハンドルでリサイズ。
-              <br />
-              ダブルクリックでテキスト/画像URLを編集。
-              <br />
-              関係(矢印)は「関係ツール→始点ノード→終点ノード」。
-            </div>
+            {selectedNode ? (
+              <div className="mt-3 text-xs text-muted-foreground">
+                クリックで選択、ドラッグで移動、右下ハンドルでリサイズ。
+                <br />
+                ダブルクリックでテキスト/画像URLを編集。
+                <br />
+                関係(矢印)は「関係ツール→始点ノード→終点ノード」。
+              </div>
+            ) : null}
 
             <div className="mt-4">
               <div className="text-xs font-medium text-muted-foreground">選択</div>
@@ -1612,135 +1619,137 @@ export function DocumentEditor({ className }: { className?: string }) {
               </div>
             </div>
 
-            <div className="mt-4 space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <InputGroup label="X">
-                  <Input
-                    inputMode="numeric"
-                    value={String(Math.round(selectedNode.x))}
-                    onChange={(e) => {
-                      const next = Number(e.target.value);
-                      if (!Number.isFinite(next)) return;
-                      setDoc((d) => ({
-                        ...d,
-                        nodes: {
-                          ...d.nodes,
-                          [selectedNode.id]: { ...selectedNode, x: next },
-                        },
-                      }));
-                    }}
-                  />
-                </InputGroup>
-                <InputGroup label="Y">
-                  <Input
-                    inputMode="numeric"
-                    value={String(Math.round(selectedNode.y))}
-                    onChange={(e) => {
-                      const next = Number(e.target.value);
-                      if (!Number.isFinite(next)) return;
-                      setDoc((d) => ({
-                        ...d,
-                        nodes: {
-                          ...d.nodes,
-                          [selectedNode.id]: { ...selectedNode, y: next },
-                        },
-                      }));
-                    }}
-                  />
-                </InputGroup>
-                <InputGroup label="W">
-                  <Input
-                    inputMode="numeric"
-                    value={String(Math.round(selectedNode.w))}
-                    onChange={(e) => {
-                      const next = Number(e.target.value);
-                      if (!Number.isFinite(next)) return;
-                      setDoc((d) => ({
-                        ...d,
-                        nodes: {
-                          ...d.nodes,
-                          [selectedNode.id]: {
-                            ...selectedNode,
-                            w: clamp(next, 24, 3200),
+            {selectedNode ? (
+              <div className="mt-4 space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <InputGroup label="X">
+                    <Input
+                      inputMode="numeric"
+                      value={String(Math.round(selectedNode.x))}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (!Number.isFinite(next)) return;
+                        setDoc((d) => ({
+                          ...d,
+                          nodes: {
+                            ...d.nodes,
+                            [selectedNode.id]: { ...selectedNode, x: next },
                           },
-                        },
-                      }));
-                    }}
-                  />
-                </InputGroup>
-                <InputGroup label="H">
-                  <Input
-                    inputMode="numeric"
-                    value={String(Math.round(selectedNode.h))}
-                    onChange={(e) => {
-                      const next = Number(e.target.value);
-                      if (!Number.isFinite(next)) return;
-                      setDoc((d) => ({
-                        ...d,
-                        nodes: {
-                          ...d.nodes,
-                          [selectedNode.id]: {
-                            ...selectedNode,
-                            h: clamp(next, 24, 3200),
+                        }));
+                      }}
+                    />
+                  </InputGroup>
+                  <InputGroup label="Y">
+                    <Input
+                      inputMode="numeric"
+                      value={String(Math.round(selectedNode.y))}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (!Number.isFinite(next)) return;
+                        setDoc((d) => ({
+                          ...d,
+                          nodes: {
+                            ...d.nodes,
+                            [selectedNode.id]: { ...selectedNode, y: next },
                           },
-                        },
-                      }));
-                    }}
-                  />
-                </InputGroup>
-              </div>
+                        }));
+                      }}
+                    />
+                  </InputGroup>
+                  <InputGroup label="W">
+                    <Input
+                      inputMode="numeric"
+                      value={String(Math.round(selectedNode.w))}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (!Number.isFinite(next)) return;
+                        setDoc((d) => ({
+                          ...d,
+                          nodes: {
+                            ...d.nodes,
+                            [selectedNode.id]: {
+                              ...selectedNode,
+                              w: clamp(next, 24, 3200),
+                            },
+                          },
+                        }));
+                      }}
+                    />
+                  </InputGroup>
+                  <InputGroup label="H">
+                    <Input
+                      inputMode="numeric"
+                      value={String(Math.round(selectedNode.h))}
+                      onChange={(e) => {
+                        const next = Number(e.target.value);
+                        if (!Number.isFinite(next)) return;
+                        setDoc((d) => ({
+                          ...d,
+                          nodes: {
+                            ...d.nodes,
+                            [selectedNode.id]: {
+                              ...selectedNode,
+                              h: clamp(next, 24, 3200),
+                            },
+                          },
+                        }));
+                      }}
+                    />
+                  </InputGroup>
+                </div>
 
-              {(() => {
-                const nodeDef = nodeRegistry.get(selectedNode.type);
-                if (!nodeDef?.inspector) return null;
-                return nodeDef.inspector({
-                  node: selectedNode as never,
-                  updateNode: (updater) =>
+                {(() => {
+                  const nodeDef = nodeRegistry.get(selectedNode.type);
+                  if (!nodeDef?.inspector) return null;
+                  return nodeDef.inspector({
+                    node: selectedNode as never,
+                    updateNode: (updater) =>
+                      setDoc((d) => {
+                        const cur = d.nodes[selectedNode.id];
+                        if (!cur) return d;
+                        return {
+                          ...d,
+                          nodes: {
+                            ...d.nodes,
+                            [selectedNode.id]: updater(cur as never) as DocNode,
+                          },
+                        };
+                      }),
+                  });
+                })()}
+
+                <Button
+                  variant="destructive"
+                  onClick={() => {
                     setDoc((d) => {
-                      const cur = d.nodes[selectedNode.id];
-                      if (!cur) return d;
+                      const nextNodes = { ...d.nodes };
+                      delete nextNodes[selectedNode.id];
+
+                      const nextEdges: Record<string, DocEdge> = {};
+                      const nextEdgeOrder: string[] = [];
+                      for (const edgeId of d.edgeOrder) {
+                        const edge = d.edges[edgeId];
+                        if (!edge) continue;
+                        if (edge.from === selectedNode.id || edge.to === selectedNode.id) continue;
+                        nextEdges[edgeId] = edge;
+                        nextEdgeOrder.push(edgeId);
+                      }
+
                       return {
                         ...d,
-                        nodes: {
-                          ...d.nodes,
-                          [selectedNode.id]: updater(cur as never) as DocNode,
-                        },
+                        nodes: nextNodes,
+                        nodeOrder: d.nodeOrder.filter((x) => x !== selectedNode.id),
+                        edges: nextEdges,
+                        edgeOrder: nextEdgeOrder,
                       };
-                    }),
-                });
-              })()}
-
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  setDoc((d) => {
-                    const nextNodes = { ...d.nodes };
-                    delete nextNodes[selectedNode.id];
-
-                    const nextEdges: Record<string, DocEdge> = {};
-                    const nextEdgeOrder: string[] = [];
-                    for (const edgeId of d.edgeOrder) {
-                      const edge = d.edges[edgeId];
-                      if (!edge) continue;
-                      if (edge.from === selectedNode.id || edge.to === selectedNode.id) continue;
-                      nextEdges[edgeId] = edge;
-                      nextEdgeOrder.push(edgeId);
-                    }
-
-                    return {
-                      ...d,
-                      nodes: nextNodes,
-                      nodeOrder: d.nodeOrder.filter((x) => x !== selectedNode.id),
-                      edges: nextEdges,
-                      edgeOrder: nextEdgeOrder,
-                    };
-                  });
-                  setSelection({ kind: "none" });
-                }}
-              >
-                ノード削除
-              </Button>
-            </div>
+                    });
+                    setSelection({ kind: "none" });
+                  }}
+                >
+                  ノード削除
+                </Button>
+              </div>
+            ) : null}
 
             {selectedEdge ? (
               <div className="mt-4 space-y-3">
@@ -2012,7 +2021,7 @@ export function DocumentEditor({ className }: { className?: string }) {
               </div>
             </div>
           </div>
-        ) : null}
+        }
       </div>
 
       <JSONSheet
