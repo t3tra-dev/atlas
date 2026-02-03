@@ -9,15 +9,15 @@ export default function Layout({ children }: { children?: ReactNode }) {
     <div className="min-h-svh flex flex-col">
       <SidebarProvider className="flex flex-1 min-h-0 min-w-0 flex-col">
         <DocumentStoreProvider>
-          <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-            <SidebarTrigger className="md:hidden" />
-            <div className="text-sm font-semibold">Atlas</div>
-          </header>
-
           <div className="flex flex-1 min-h-0 min-w-0">
             <AppSidebar />
 
             <SidebarInset>
+              <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+                <SidebarTrigger className="md:hidden" />
+                <div className="text-sm font-semibold">Atlas</div>
+              </header>
+
               <div className="flex flex-1 min-h-0 min-w-0">
                 <DocumentPane className="flex-1 min-w-0">{children}</DocumentPane>
               </div>
