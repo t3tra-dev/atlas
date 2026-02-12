@@ -76,6 +76,7 @@ export function createDefaultDocument(title = "ドキュメント"): DocumentMod
   return {
     version: 1,
     title,
+    camera: { x: 0, y: 0, scale: 1 },
     canvas: { width: 3200, height: 2200, background: "grid" },
     nodes,
     nodeOrder: [rectId, textId, ellipseId],

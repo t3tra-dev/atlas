@@ -678,6 +678,7 @@ export function buildDocumentFromMermaid(source: string): DocumentModel {
   return {
     version: 1,
     title: "Mermaid",
+    camera: { x: 0, y: 0, scale: 1 },
     canvas: {
       width,
       height,

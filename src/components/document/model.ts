@@ -43,6 +43,7 @@ export type DocEdge = {
 export type DocumentModel = {
   version: 1;
   title: string;
+  camera: Camera;
   canvas: {
     width: number;
     height: number;
@@ -65,14 +66,18 @@ export type Tool =
         h?: number;
       };
     }
-  | { kind: "connect"; edge: { shape: EdgeShape; arrow: EdgeArrow }; fromId: string | null };
+  | {
+      kind: "connect";
+      edge: { shape: EdgeShape; arrow: EdgeArrow };
+      fromId: string | null;
+    };
 
 export type Selection =
   | { kind: "none" }
   | { kind: "node"; id: string }
   | { kind: "edge"; id: string };
 
-export const STORAGE_KEY = "atlas.documents.v1";
+export const STORAGE_KEY = "atlas.documents";
 
 export type Camera = {
   x: number; // world coordinate at viewport's left

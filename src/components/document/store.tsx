@@ -57,7 +57,7 @@ function loadStore(): DocumentStoreState {
 
         const docs = parsed.docs
           .map((doc, index) => {
-            if (!doc?.doc) return null;
+            if (!doc?.doc || !doc.doc.camera) return null;
             const fallback = `ドキュメント ${index + 1}`;
             const title = ensureTitle(doc.title ?? doc.doc?.title, fallback);
             return {

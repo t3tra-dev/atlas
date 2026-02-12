@@ -219,7 +219,7 @@ function safeParseDoc(
     if (p.version !== 1) {
       return { ok: false, error: "version=1のドキュメントのみ対応しています" };
     }
-    if (!p.nodes || !p.nodeOrder || !p.edges || !p.edgeOrder || !p.canvas) {
+    if (!p.nodes || !p.nodeOrder || !p.edges || !p.edgeOrder || !p.canvas || !p.camera) {
       return { ok: false, error: "必須フィールドが不足しています" };
     }
 
@@ -539,7 +539,44 @@ export function DocumentEditor({ className }: { className?: string }) {
     return () => ro.disconnect();
   }, []);
 
-  const [camera, setCamera] = React.useState<Camera>({ x: 0, y: 0, scale: 1 });
+  const [camera, setCamera] = React.useState<Camera>(() => doc.camera);
+  const cameraRef = React.useRef(camera);
+  const cameraCommitTimerRef = React.useRef<number | null>(null);
+
+  const setCameraState = React.useCallback((next: Camera | ((prev: Camera) => Camera)) => {
+    setCamera((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      cameraRef.current = resolved;
+      return resolved;
+    });
+  }, []);
+
+  const commitCamera = React.useCallback(() => {
+    const next = cameraRef.current;
+    setDoc((prev) => {
+      if (
+        prev.camera.x === next.x &&
+        prev.camera.y === next.y &&
+        prev.camera.scale === next.scale
+      ) {
+        return prev;
+      }
+      return { ...prev, camera: next };
+    });
+  }, [setDoc]);
+
+  const scheduleCameraCommit = React.useCallback(
+    (delayMs = 150) => {
+      if (cameraCommitTimerRef.current != null) {
+        window.clearTimeout(cameraCommitTimerRef.current);
+      }
+      cameraCommitTimerRef.current = window.setTimeout(() => {
+        cameraCommitTimerRef.current = null;
+        commitCamera();
+      }, delayMs);
+    },
+    [commitCamera],
+  );
   const [tool, setTool] = React.useState<Tool>({ kind: "select" });
   const [selection, setSelection] = React.useState<Selection>({ kind: "none" });
   const [drag, setDrag] = React.useState<DragState>({ kind: "none" });
@@ -563,11 +600,25 @@ export function DocumentEditor({ className }: { className?: string }) {
   const [mermaidDraft, setMermaidDraft] = React.useState<string>("");
 
   React.useEffect(() => {
+    if (cameraCommitTimerRef.current != null) {
+      window.clearTimeout(cameraCommitTimerRef.current);
+      cameraCommitTimerRef.current = null;
+    }
     setSelection({ kind: "none" });
     setTool({ kind: "select" });
     setDrag({ kind: "none" });
     setConnectPreview(null);
-  }, [activeDoc?.id]);
+    setCameraState(doc.camera);
+  }, [activeDoc?.id, doc.camera, setCameraState]);
+
+  React.useEffect(() => {
+    return () => {
+      if (cameraCommitTimerRef.current != null) {
+        window.clearTimeout(cameraCommitTimerRef.current);
+        cameraCommitTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const viewportRect = React.useCallback(
     () => viewportRef.current?.getBoundingClientRect() ?? null,
@@ -575,26 +626,28 @@ export function DocumentEditor({ className }: { className?: string }) {
   );
 
   const zoomToAtClient = React.useCallback(
-    (nextScale: number, clientX?: number, clientY?: number) => {
+    (zoomFactor: number, clientX?: number, clientY?: number) => {
       const rect = viewportRect();
-      const clamped = clamp(Number(nextScale.toFixed(3)), 0.2, 3);
-      if (!rect) {
-        setCamera((c) => ({ ...c, scale: clamped }));
-        return;
-      }
+      setCameraState((prev) => {
+        const clamped = clamp(Number((prev.scale * zoomFactor).toFixed(3)), 0.2, 3);
+        if (!rect) {
+          return { ...prev, scale: clamped };
+        }
 
-      const sx = (clientX ?? rect.left + rect.width / 2) - rect.left;
-      const sy = (clientY ?? rect.top + rect.height / 2) - rect.top;
-      const worldX = camera.x + sx / camera.scale;
-      const worldY = camera.y + sy / camera.scale;
+        const sx = (clientX ?? rect.left + rect.width / 2) - rect.left;
+        const sy = (clientY ?? rect.top + rect.height / 2) - rect.top;
+        const worldX = prev.x + sx / prev.scale;
+        const worldY = prev.y + sy / prev.scale;
 
-      setCamera({
-        x: worldX - sx / clamped,
-        y: worldY - sy / clamped,
-        scale: clamped,
+        return {
+          x: worldX - sx / clamped,
+          y: worldY - sy / clamped,
+          scale: clamped,
+        };
       });
+      scheduleCameraCommit(150);
     },
-    [camera.scale, camera.x, camera.y, viewportRect],
+    [scheduleCameraCommit, setCameraState, viewportRect],
   );
 
   const handleWheel = React.useCallback(
@@ -602,9 +655,9 @@ export function DocumentEditor({ className }: { className?: string }) {
       e.preventDefault();
       const delta = e.deltaY;
       const zoomFactor = Math.exp(-delta * 0.0012);
-      zoomToAtClient(camera.scale * zoomFactor, e.clientX, e.clientY);
+      zoomToAtClient(zoomFactor, e.clientX, e.clientY);
     },
-    [camera.scale, zoomToAtClient],
+    [zoomToAtClient],
   );
 
   React.useEffect(() => {
@@ -618,29 +671,33 @@ export function DocumentEditor({ className }: { className?: string }) {
   }, [handleWheel]);
 
   const zoomToCentered = React.useCallback(
-    (nextScale: number) => {
-      const clamped = clamp(Number(nextScale.toFixed(3)), 0.2, 3);
+    (nextScale: number | ((prev: number) => number)) => {
+      setCameraState((prev) => {
+        const targetScale = typeof nextScale === "function" ? nextScale(prev.scale) : nextScale;
+        const clamped = clamp(Number(targetScale.toFixed(3)), 0.2, 3);
 
-      const sx = viewportSize.width / 2;
-      const sy = viewportSize.height / 2;
-      const worldX = camera.x + sx / camera.scale;
-      const worldY = camera.y + sy / camera.scale;
+        const sx = viewportSize.width / 2;
+        const sy = viewportSize.height / 2;
+        const worldX = prev.x + sx / prev.scale;
+        const worldY = prev.y + sy / prev.scale;
 
-      setCamera({
-        x: worldX - sx / clamped,
-        y: worldY - sy / clamped,
-        scale: clamped,
+        return {
+          x: worldX - sx / clamped,
+          y: worldY - sy / clamped,
+          scale: clamped,
+        };
       });
+      scheduleCameraCommit(150);
     },
-    [camera.scale, camera.x, camera.y, viewportSize.height, viewportSize.width],
+    [scheduleCameraCommit, setCameraState, viewportSize.height, viewportSize.width],
   );
 
   const openJSONSheet = React.useCallback(
     (mode: "export" | "import") => {
-      setJSONDraft(JSON.stringify(doc, null, 2));
+      setJSONDraft(JSON.stringify({ ...doc, camera }, null, 2));
       setJSONSheet({ mode, error: null });
     },
-    [doc],
+    [camera, doc],
   );
 
   const openMermaidImportDialog = React.useCallback(() => {
@@ -674,14 +731,24 @@ export function DocumentEditor({ className }: { className?: string }) {
         },
         camera: {
           get: () => camera,
-          set: (next) => setCamera((prev) => (typeof next === "function" ? next(prev) : next)),
+          set: (next) => setCameraState(next),
         },
         viewport: {
           zoomTo: (nextScale) => zoomToCentered(nextScale),
-          zoomBy: (delta) => zoomToCentered(camera.scale + delta),
+          zoomBy: (delta) => zoomToCentered((prev) => prev + delta),
         },
       }),
-    [camera, doc, openJSONSheet, openMermaidImportDialog, selection, setDoc, tool, zoomToCentered],
+    [
+      camera,
+      doc,
+      openJSONSheet,
+      openMermaidImportDialog,
+      selection,
+      setDoc,
+      setCameraState,
+      tool,
+      zoomToCentered,
+    ],
   );
 
   const pluginHost = React.useMemo(() => createPluginHost([BuiltinPlugin], { sdk }), [sdk]);
@@ -837,7 +904,7 @@ export function DocumentEditor({ className }: { className?: string }) {
         );
         if (!drag.didPan && movedPx < PAN_THRESHOLD_PX) return;
 
-        setCamera((c) => ({
+        setCameraState((c) => ({
           ...c,
           x: drag.startCamX - (e.clientX - drag.startClientX) / c.scale,
           y: drag.startCamY - (e.clientY - drag.startClientY) / c.scale,
@@ -933,6 +1000,9 @@ export function DocumentEditor({ className }: { className?: string }) {
       if (drag.kind === "pan" && !drag.didPan && drag.clickClearsSelection) {
         setSelection({ kind: "none" });
       }
+      if (drag.kind === "pan" && drag.didPan) {
+        scheduleCameraCommit(0);
+      }
 
       if (drag.kind === "drawShape") {
         const movedPx = Math.max(
@@ -978,7 +1048,7 @@ export function DocumentEditor({ className }: { className?: string }) {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [camera.scale, drag, nodeRegistry, setDoc]);
+  }, [camera.scale, drag, nodeRegistry, scheduleCameraCommit, setCameraState, setDoc]);
 
   const onCanvasPointerDown = React.useCallback(
     (e: React.PointerEvent) => {
@@ -1332,7 +1402,7 @@ export function DocumentEditor({ className }: { className?: string }) {
                   setDoc(createDefaultDocument(doc.title || "ドキュメント"));
                   setSelection({ kind: "none" });
                   setTool({ kind: "select" });
-                  setCamera({ x: 0, y: 0, scale: 1 });
+                  setCameraState({ x: 0, y: 0, scale: 1 });
                 }}
               >
                 リセット
@@ -1594,8 +1664,8 @@ export function DocumentEditor({ className }: { className?: string }) {
 
         {
           <div
-            className={`hidden w-[320px] shrink-0 border-l bg-background p-3 md:block${
-              hasSelection ? "" : " invisible pointer-events-none"
+            className={`hidden w-[320px] shrink-0 border-l bg-background p-3${
+              hasSelection ? " md:block" : " md:hidden"
             }`}
           >
             <div className="text-sm font-semibold">プロパティ</div>
