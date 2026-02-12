@@ -756,7 +756,7 @@ export function buildMermaidElements(
         from: fromId,
         to: toId,
         props: {
-          color: "#111827",
+          color: "#5a75bc",
           width: 2,
           dash: "solid",
         },
@@ -838,7 +838,7 @@ export function buildMermaidElements(
       from: fromId,
       to: toId,
       props: {
-        color: "#111827",
+        color: "#5a75bc",
         width: edge.width,
         dash: edge.dashed ? "dashed" : "solid",
         label: edge.label?.trim() ? edge.label.trim() : undefined,

@@ -251,7 +251,7 @@ function safeParseDoc(
             const props = edgeObj.props;
             const propsObj =
               props && typeof props === "object" ? (props as Record<string, unknown>) : null;
-            return String(propsObj?.color ?? "#111827");
+            return String(propsObj?.color ?? "#5a75bc");
           })(),
           width: (() => {
             const props = edgeObj.props;
@@ -1140,7 +1140,7 @@ export function DocumentEditor({ className }: { className?: string }) {
             from: tool.fromId,
             to: nodeId,
             props: {
-              color: "#111827",
+              color: "#5a75bc",
               width: 2,
               dash: "solid",
               curve: tool.edge.shape === "curve" ? 0.25 : undefined,
@@ -2034,7 +2034,7 @@ export function DocumentEditor({ className }: { className?: string }) {
                     <Input
                       type="color"
                       className="h-9 w-14 p-1"
-                      value={normalizeHexColor(selectedEdge.props.color) ?? "#111827"}
+                      value={normalizeHexColor(selectedEdge.props.color) ?? "#5a75bc"}
                       onChange={(e) => {
                         const next = e.target.value;
                         setDoc((d) => ({

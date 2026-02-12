@@ -69,7 +69,7 @@ export function createDefaultDocument(title = "ドキュメント"): DocumentMod
       arrow: "none",
       from: rectId,
       to: ellipseId,
-      props: { color: "#111827", width: 2, dash: "solid", curve: 0.25 },
+      props: { color: "#5a75bc", width: 2, dash: "solid", curve: 0.25 },
     },
   };
 
