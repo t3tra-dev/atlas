@@ -1,12 +1,12 @@
 import * as React from "react";
-import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+import { FilesetResolver, GestureRecognizer } from "@mediapipe/tasks-vision";
 import { cn } from "@/lib/utils";
 
 const WASM_BASE_PATH = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm";
-const MODEL_PATH = "/tasks/hand_landmarker.task";
+const MODEL_PATH = "/tasks/gesture_recognizer.task";
 const MODEL_DB_NAME = "atlas.media";
 const MODEL_STORE_NAME = "models";
-const MODEL_KEY = "hand_landmarker.task";
+const MODEL_KEY = "gesture_recognizer.task";
 
 const openModelDb = () =>
   new Promise<IDBDatabase>((resolve, reject) => {
@@ -122,6 +122,7 @@ type HandSlot = {
   label: "Left" | "Right" | "Unknown";
   filters: LandmarkFilter[];
   lastCenter: Landmark | null;
+  lastSeenAt: number | null;
 };
 
 class Kalman1D {
@@ -202,12 +203,12 @@ export function HandLandmarkerOverlay({
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
   const rafRef = React.useRef<number | null>(null);
-  const landmarkerRef = React.useRef<HandLandmarker | null>(null);
-  const landmarkerPromiseRef = React.useRef<Promise<HandLandmarker> | null>(null);
+  const recognizerRef = React.useRef<GestureRecognizer | null>(null);
+  const recognizerPromiseRef = React.useRef<Promise<GestureRecognizer> | null>(null);
   const modelUrlRef = React.useRef<string | null>(null);
   const landmarkFiltersRef = React.useRef<HandSlot[]>([
-    { label: "Unknown", filters: [], lastCenter: null },
-    { label: "Unknown", filters: [], lastCenter: null },
+    { label: "Unknown", filters: [], lastCenter: null, lastSeenAt: null },
+    { label: "Unknown", filters: [], lastCenter: null, lastSeenAt: null },
   ]);
   const lastFrameTimeRef = React.useRef<number | null>(null);
 
@@ -243,17 +244,17 @@ export function HandLandmarkerOverlay({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }, []);
 
-  const ensureLandmarker = React.useCallback(async () => {
-    if (landmarkerRef.current) return landmarkerRef.current;
-    if (!landmarkerPromiseRef.current) {
-      landmarkerPromiseRef.current = (async () => {
+  const ensureRecognizer = React.useCallback(async () => {
+    if (recognizerRef.current) return recognizerRef.current;
+    if (!recognizerPromiseRef.current) {
+      recognizerPromiseRef.current = (async () => {
         const vision = await FilesetResolver.forVisionTasks(WASM_BASE_PATH);
         if (!modelUrlRef.current) {
           modelUrlRef.current = await resolveModelAssetPath();
         }
         const modelAssetPath = modelUrlRef.current;
         try {
-          const landmarker = await HandLandmarker.createFromOptions(vision, {
+          const recognizer = await GestureRecognizer.createFromOptions(vision, {
             baseOptions: {
               modelAssetPath,
               delegate: "GPU",
@@ -264,10 +265,10 @@ export function HandLandmarkerOverlay({
             minHandPresenceConfidence: 0.2,
             minTrackingConfidence: 0.2,
           });
-          landmarkerRef.current = landmarker;
-          return landmarker;
+          recognizerRef.current = recognizer;
+          return recognizer;
         } catch (error) {
-          const landmarker = await HandLandmarker.createFromOptions(vision, {
+          const recognizer = await GestureRecognizer.createFromOptions(vision, {
             baseOptions: {
               modelAssetPath,
               delegate: "CPU",
@@ -278,15 +279,15 @@ export function HandLandmarkerOverlay({
             minHandPresenceConfidence: 0.2,
             minTrackingConfidence: 0.2,
           });
-          landmarkerRef.current = landmarker;
+          recognizerRef.current = recognizer;
           if (import.meta.env.DEV) {
             console.warn("Falling back to CPU delegate", error);
           }
-          return landmarker;
+          return recognizer;
         }
       })();
     }
-    return landmarkerPromiseRef.current;
+    return recognizerPromiseRef.current;
   }, []);
 
   const drawLandmarks = React.useCallback(
@@ -314,8 +315,8 @@ export function HandLandmarkerOverlay({
       stopStream();
       clearCanvas();
       landmarkFiltersRef.current = [
-        { label: "Unknown", filters: [], lastCenter: null },
-        { label: "Unknown", filters: [], lastCenter: null },
+        { label: "Unknown", filters: [], lastCenter: null, lastSeenAt: null },
+        { label: "Unknown", filters: [], lastCenter: null, lastSeenAt: null },
       ];
       lastFrameTimeRef.current = null;
       return;
@@ -347,9 +348,9 @@ export function HandLandmarkerOverlay({
         video.srcObject = stream;
         await video.play();
 
-        void ensureLandmarker().catch((error) => {
+        void ensureRecognizer().catch((error) => {
           if (import.meta.env.DEV) {
-            console.warn("Hand landmarker init failed", error);
+            console.warn("Gesture recognizer init failed", error);
           }
         });
 
@@ -397,10 +398,10 @@ export function HandLandmarkerOverlay({
             ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
             ctx.fillRect(0, 0, targetWidth, targetHeight);
 
-            const landmarker = landmarkerRef.current;
-            if (landmarker) {
+            const recognizer = recognizerRef.current;
+            if (recognizer) {
               try {
-                const result = landmarker.detectForVideo(activeVideo, now);
+                const result = recognizer.recognizeForVideo(activeVideo, now);
                 if (result.landmarks?.length) {
                   const slots = landmarkFiltersRef.current;
                   const lead = Math.min(0.08, dt * 1.5);
@@ -420,25 +421,67 @@ export function HandLandmarkerOverlay({
                   const usedSlots = new Set<number>();
 
                   const maxJump = 0.25;
+                  const slotStaleMs = 450;
+                  const slotExpireMs = 700;
+                  const computeCost = (
+                    center: Landmark,
+                    label: HandSlot["label"],
+                    slot: HandSlot,
+                    nowMs: number,
+                  ) => {
+                    if (slot.label !== "Unknown" && label !== "Unknown" && slot.label !== label) {
+                      return Number.POSITIVE_INFINITY;
+                    }
+                    const last = slot.lastCenter;
+                    const ageMs = slot.lastSeenAt ? nowMs - slot.lastSeenAt : Infinity;
+                    const dx = last ? center.x - last.x : 0;
+                    const dy = last ? center.y - last.y : 0;
+                    const dist = last ? Math.hypot(dx, dy) : 0.2;
+                    if (last && dist > maxJump && ageMs < slotStaleMs) {
+                      return Number.POSITIVE_INFINITY;
+                    }
+                    const labelPenalty =
+                      slot.label !== "Unknown" && label !== "Unknown" && slot.label === label
+                        ? 0
+                        : 0.15;
+                    const agePenalty = Number.isFinite(ageMs)
+                      ? Math.min(0.3, (ageMs / 1000) * 0.3)
+                      : 0;
+                    return dist + labelPenalty + agePenalty;
+                  };
+
+                  if (centers.length >= 2 && slots.length >= 2) {
+                    // Solve 2x2 assignment to prevent slot swapping when both hands are present.
+                    const c00 = computeCost(centers[0], labels[0], slots[0], now);
+                    const c01 = computeCost(centers[0], labels[0], slots[1], now);
+                    const c10 = computeCost(centers[1], labels[1], slots[0], now);
+                    const c11 = computeCost(centers[1], labels[1], slots[1], now);
+                    const aValid = Number.isFinite(c00) && Number.isFinite(c11);
+                    const bValid = Number.isFinite(c01) && Number.isFinite(c10);
+                    if (aValid || bValid) {
+                      const pickA = aValid && (!bValid || c00 + c11 <= c01 + c10);
+                      if (pickA) {
+                        slotAssignments.set(0, 0);
+                        slotAssignments.set(1, 1);
+                        usedSlots.add(0);
+                        usedSlots.add(1);
+                      } else {
+                        slotAssignments.set(0, 1);
+                        slotAssignments.set(1, 0);
+                        usedSlots.add(0);
+                        usedSlots.add(1);
+                      }
+                    }
+                  }
+
                   centers.forEach((center, handIndex) => {
+                    if (slotAssignments.has(handIndex)) return;
                     const label = labels[handIndex];
                     let bestSlot = -1;
                     let bestScore = Number.POSITIVE_INFINITY;
                     slots.forEach((slot, slotIndex) => {
                       if (usedSlots.has(slotIndex)) return;
-                      if (slot.label !== "Unknown" && label !== "Unknown" && slot.label !== label) {
-                        return;
-                      }
-                      const last = slot.lastCenter;
-                      const dx = last ? center.x - last.x : 0;
-                      const dy = last ? center.y - last.y : 0;
-                      const dist = last ? Math.hypot(dx, dy) : 0.2;
-                      if (last && dist > maxJump) return;
-                      const labelPenalty =
-                        slot.label !== "Unknown" && label !== "Unknown" && slot.label === label
-                          ? 0
-                          : 0.15;
-                      const score = dist + labelPenalty;
+                      const score = computeCost(center, label, slot, now);
                       if (score < bestScore) {
                         bestScore = score;
                         bestSlot = slotIndex;
@@ -450,14 +493,17 @@ export function HandLandmarkerOverlay({
                     }
                   });
 
-                  const filtered = result.landmarks.map((hand, handIndex) => {
-                    const slotIndex = slotAssignments.get(handIndex) ?? 0;
+                  const filtered: Landmark[][] = [];
+                  result.landmarks.forEach((hand, handIndex) => {
+                    const slotIndex = slotAssignments.get(handIndex);
+                    if (slotIndex === undefined) return;
                     const slot = slots[slotIndex];
                     if (labels[handIndex] !== "Unknown") {
                       slot.label = labels[handIndex];
                     }
                     slot.lastCenter = centers[handIndex];
-                    return hand.map((point, pointIndex) => {
+                    slot.lastSeenAt = now;
+                    const filteredHand = hand.map((point, pointIndex) => {
                       if (!slot.filters[pointIndex]) {
                         slot.filters[pointIndex] = {
                           x: new Kalman1D(2.5e-2, 8e-3),
@@ -470,6 +516,17 @@ export function HandLandmarkerOverlay({
                         y: filter.y.update(point.y, dt, lead),
                       } as Landmark;
                     });
+                    filtered.push(filteredHand);
+                  });
+
+                  slots.forEach((slot, slotIndex) => {
+                    if (usedSlots.has(slotIndex)) return;
+                    if (slot.lastSeenAt && now - slot.lastSeenAt > slotExpireMs) {
+                      slot.label = "Unknown";
+                      slot.lastCenter = null;
+                      slot.lastSeenAt = null;
+                      slot.filters = [];
+                    }
                   });
 
                   ctx.filter = "none";
@@ -483,7 +540,7 @@ export function HandLandmarkerOverlay({
                 }
               } catch (error) {
                 if (import.meta.env.DEV) {
-                  console.warn("Hand landmarker detect failed", error);
+                  console.warn("Gesture recognizer detect failed", error);
                 }
               }
             }
@@ -517,7 +574,7 @@ export function HandLandmarkerOverlay({
     clearCanvas,
     drawLandmarks,
     enabled,
-    ensureLandmarker,
+    ensureRecognizer,
     onPermissionChange,
     onRequestDisable,
     revokeModelUrl,
