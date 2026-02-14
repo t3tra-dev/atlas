@@ -811,11 +811,11 @@ export function DocumentEditor({ className }: { className?: string }) {
   const viewportStyle = React.useMemo(() => {
     const grid = 24;
     if (doc.canvas.background !== "grid") {
-      return { backgroundColor: "var(--background)" } as React.CSSProperties;
+      return { backgroundColor: "transparent" } as React.CSSProperties;
     }
 
     return {
-      backgroundColor: "var(--background)",
+      backgroundColor: "transparent",
       backgroundImage:
         "linear-gradient(to right, rgba(127,127,127,0.15) 1px, transparent 1px), linear-gradient(to bottom, rgba(127,127,127,0.15) 1px, transparent 1px)",
       backgroundSize: `${grid * camera.scale}px ${grid * camera.scale}px`,
@@ -1456,10 +1456,10 @@ export function DocumentEditor({ className }: { className?: string }) {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         <div
           ref={viewportRef}
-          className="relative min-h-0 flex-1 overflow-hidden bg-background"
+          className="relative min-h-0 flex-1 overflow-hidden bg-transparent"
           style={viewportStyle}
           onPointerMove={(e) => {
             if (tool.kind !== "connect" || !tool.fromId) return;
@@ -1664,9 +1664,10 @@ export function DocumentEditor({ className }: { className?: string }) {
 
         {
           <div
-            className={`hidden w-[320px] shrink-0 border-l bg-background p-3${
-              hasSelection ? " md:block" : " md:hidden"
-            }`}
+            className={cn(
+              "absolute right-0 top-0 hidden h-full w-[320px] border-l bg-background p-3 transition-opacity duration-150 md:block",
+              hasSelection ? "opacity-100" : "pointer-events-none opacity-0",
+            )}
           >
             <div className="text-sm font-semibold">プロパティ</div>
 
