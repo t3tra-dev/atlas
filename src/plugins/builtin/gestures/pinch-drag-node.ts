@@ -8,7 +8,7 @@ const PINCH_THRESHOLD_PX = 25;
 const MOVE_EPSILON = 1e-3;
 const CLOSED_FIST_LABEL = "Closed_Fist";
 const CLOSED_FIST_INDEX = 1;
-const MIN_CLOSED_FIST_SCORE = 0.35;
+const MIN_CLOSED_FIST_SCORE = 0.5;
 
 type Point = {
   x: number;
