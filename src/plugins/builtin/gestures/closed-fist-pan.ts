@@ -2,7 +2,7 @@ import { GestureRegister } from "@/components/document/sdk";
 import type { GestureFrame, GestureRunContext } from "@/components/document/sdk";
 
 const CLOSED_FIST_LABEL = "Closed_Fist";
-const CLOSED_FIST_INDEX = 2;
+const CLOSED_FIST_INDEX = 1;
 const MIN_CLOSED_FIST_SCORE = 0.35;
 
 type Point = {

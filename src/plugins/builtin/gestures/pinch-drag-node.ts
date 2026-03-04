@@ -6,6 +6,9 @@ const THUMB_TIP_INDEX = 4;
 const INDEX_TIP_INDEX = 8;
 const PINCH_THRESHOLD_PX = 25;
 const MOVE_EPSILON = 1e-3;
+const CLOSED_FIST_LABEL = "Closed_Fist";
+const CLOSED_FIST_INDEX = 1;
+const MIN_CLOSED_FIST_SCORE = 0.35;
 
 type Point = {
   x: number;
@@ -64,6 +67,15 @@ export class PinchDragNodeGestureRegister extends GestureRegister {
   private activeNodeId: string | null = null;
   private previousCenterWorld: Point | null = null;
 
+  private isClosedFist(hand: GestureFrame["hands"][number]) {
+    return hand.gestures.some((gesture) => {
+      if (gesture.score < MIN_CLOSED_FIST_SCORE) return false;
+      if (gesture.categoryName === CLOSED_FIST_LABEL) return true;
+      if (gesture.displayName?.toLowerCase().replaceAll(" ", "_") === "closed_fist") return true;
+      return gesture.index === CLOSED_FIST_INDEX;
+    });
+  }
+
   private resetState() {
     this.activeNodeId = null;
     this.previousCenterWorld = null;
@@ -107,6 +119,11 @@ export class PinchDragNodeGestureRegister extends GestureRegister {
   }
 
   onFrame(frame: GestureFrame, ctx: GestureRunContext) {
+    if (frame.hands.length >= 2 && frame.hands.every((hand) => this.isClosedFist(hand))) {
+      this.resetState();
+      return;
+    }
+
     const measurements = this.collectMeasurements(frame, ctx);
     const candidate =
       measurements
