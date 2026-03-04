@@ -9,6 +9,7 @@ const MODEL_PATH = "/tasks/gesture_recognizer.task";
 const MODEL_DB_NAME = "atlas.media";
 const MODEL_STORE_NAME = "models";
 const MODEL_KEY = "gesture_recognizer.task";
+const DOC_VIEWPORT_SELECTOR = '[data-atlas-doc-viewport="true"]';
 
 const openModelDb = () =>
   new Promise<IDBDatabase>((resolve, reject) => {
@@ -127,6 +128,13 @@ type HandSlot = {
   lastSeenAt: number | null;
 };
 
+type ViewportBox = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
 class Kalman1D {
   private x = 0;
   private v = 0;
@@ -201,6 +209,7 @@ export function HandLandmarkerOverlay({
   onPermissionChange,
   onRequestDisable,
 }: HandLandmarkerOverlayProps) {
+  const hostRef = React.useRef<HTMLDivElement | null>(null);
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
@@ -213,6 +222,82 @@ export function HandLandmarkerOverlay({
     { label: "Unknown", filters: [], lastCenter: null, lastSeenAt: null },
   ]);
   const lastFrameTimeRef = React.useRef<number | null>(null);
+  const [viewportBox, setViewportBox] = React.useState<ViewportBox | null>(null);
+
+  React.useEffect(() => {
+    let rafId: number | null = null;
+
+    const measure = () => {
+      const host = hostRef.current;
+      const viewport = document.querySelector<HTMLElement>(DOC_VIEWPORT_SELECTOR);
+      if (!host || !viewport) {
+        setViewportBox(null);
+        return;
+      }
+      const hostRect = host.getBoundingClientRect();
+      const viewportRect = viewport.getBoundingClientRect();
+      const next: ViewportBox = {
+        left: viewportRect.left - hostRect.left,
+        top: viewportRect.top - hostRect.top,
+        width: viewportRect.width,
+        height: viewportRect.height,
+      };
+      if (next.width <= 0 || next.height <= 0) {
+        setViewportBox(null);
+        return;
+      }
+      setViewportBox((prev) => {
+        if (
+          prev &&
+          Math.abs(prev.left - next.left) < 0.5 &&
+          Math.abs(prev.top - next.top) < 0.5 &&
+          Math.abs(prev.width - next.width) < 0.5 &&
+          Math.abs(prev.height - next.height) < 0.5
+        ) {
+          return prev;
+        }
+        return next;
+      });
+    };
+
+    const scheduleMeasure = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        measure();
+      });
+    };
+
+    scheduleMeasure();
+
+    const ro =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            scheduleMeasure();
+          })
+        : null;
+
+    if (ro) {
+      const host = hostRef.current;
+      const viewport = document.querySelector<HTMLElement>(DOC_VIEWPORT_SELECTOR);
+      if (host) ro.observe(host);
+      if (viewport) ro.observe(viewport);
+    }
+
+    window.addEventListener("resize", scheduleMeasure);
+    window.addEventListener("scroll", scheduleMeasure, true);
+
+    return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      ro?.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+      window.removeEventListener("scroll", scheduleMeasure, true);
+    };
+  }, []);
 
   const stopLoop = React.useCallback(() => {
     if (rafRef.current !== null) {
@@ -527,6 +612,15 @@ export function HandLandmarkerOverlay({
                       } as Landmark;
                     });
                     filtered.push(filteredHand);
+                    const gestureLandmarks = filteredHand.map((point) => {
+                      const px = point.x * videoWidth * scale + offsetX;
+                      const py = point.y * videoHeight * scale + offsetY;
+                      return {
+                        // Normalize in viewport space (not raw video space)
+                        x: targetWidth > 0 ? px / targetWidth : point.x,
+                        y: targetHeight > 0 ? py / targetHeight : point.y,
+                      };
+                    });
                     const handednessTop = result.handednesses?.[handIndex]?.[0];
                     const gestureTop = result.gestures?.[handIndex]?.[0];
                     const gestureList =
@@ -547,7 +641,7 @@ export function HandLandmarkerOverlay({
                         ];
                       }) ?? [];
                     frameHands.push({
-                      landmarks: filteredHand,
+                      landmarks: gestureLandmarks,
                       handedness: labels[handIndex],
                       handednessScore:
                         typeof handednessTop?.score === "number" ? handednessTop.score : 0,
@@ -660,21 +754,40 @@ export function HandLandmarkerOverlay({
   ]);
 
   return (
-    <div className={cn("absolute inset-0 pointer-events-none", className)}>
+    <div ref={hostRef} className={cn("absolute inset-0 pointer-events-none", className)}>
       <div
-        className="absolute inset-0"
-        style={{
-          transform: mirrored ? "scaleX(-1)" : "none",
-          transformOrigin: "center",
-        }}
+        className="absolute overflow-hidden"
+        style={
+          viewportBox
+            ? {
+                left: viewportBox.left,
+                top: viewportBox.top,
+                width: viewportBox.width,
+                height: viewportBox.height,
+              }
+            : {
+                left: 0,
+                top: 0,
+                width: "100%",
+                height: "100%",
+              }
+        }
       >
-        <video
-          ref={videoRef}
-          className="absolute inset-0 h-full w-full object-cover opacity-0"
-          playsInline
-          muted
-        />
-        <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+        <div
+          className="absolute inset-0"
+          style={{
+            transform: mirrored ? "scaleX(-1)" : "none",
+            transformOrigin: "center",
+          }}
+        >
+          <video
+            ref={videoRef}
+            className="absolute inset-0 h-full w-full object-cover opacity-0"
+            playsInline
+            muted
+          />
+          <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+        </div>
       </div>
     </div>
   );
