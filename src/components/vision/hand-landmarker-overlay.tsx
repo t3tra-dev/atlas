@@ -506,8 +506,8 @@ export function HandLandmarkerOverlay({
                     const filteredHand = hand.map((point, pointIndex) => {
                       if (!slot.filters[pointIndex]) {
                         slot.filters[pointIndex] = {
-                          x: new Kalman1D(2.5e-2, 8e-3),
-                          y: new Kalman1D(2.5e-2, 8e-3),
+                          x: new Kalman1D(8e-2, 2e-3),
+                          y: new Kalman1D(8e-2, 2e-3),
                         };
                       }
                       const filter = slot.filters[pointIndex];
