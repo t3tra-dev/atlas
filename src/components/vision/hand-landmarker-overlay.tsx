@@ -1,6 +1,8 @@
 import * as React from "react";
 import { FilesetResolver, GestureRecognizer } from "@mediapipe/tasks-vision";
 import { cn } from "@/lib/utils";
+import type { GestureFrame } from "@/components/document/sdk";
+import { publishGestureFrame } from "@/components/vision/gesture-frame-bus";
 
 const WASM_BASE_PATH = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm";
 const MODEL_PATH = "/tasks/gesture_recognizer.task";
@@ -314,6 +316,13 @@ export function HandLandmarkerOverlay({
       stopLoop();
       stopStream();
       clearCanvas();
+      publishGestureFrame({
+        timestampMs: Date.now(),
+        viewportWidth: 0,
+        viewportHeight: 0,
+        mirrored,
+        hands: [],
+      });
       landmarkFiltersRef.current = [
         { label: "Unknown", filters: [], lastCenter: null, lastSeenAt: null },
         { label: "Unknown", filters: [], lastCenter: null, lastSeenAt: null },
@@ -400,6 +409,7 @@ export function HandLandmarkerOverlay({
 
             const recognizer = recognizerRef.current;
             if (recognizer) {
+              const frameHands: GestureFrame["hands"] = [];
               try {
                 const result = recognizer.recognizeForVideo(activeVideo, now);
                 if (result.landmarks?.length) {
@@ -517,6 +527,43 @@ export function HandLandmarkerOverlay({
                       } as Landmark;
                     });
                     filtered.push(filteredHand);
+                    const handednessTop = result.handednesses?.[handIndex]?.[0];
+                    const gestureTop = result.gestures?.[handIndex]?.[0];
+                    const gestureList =
+                      result.gestures?.[handIndex]?.flatMap((gesture) => {
+                        if (
+                          typeof gesture?.categoryName !== "string" ||
+                          typeof gesture?.score !== "number"
+                        ) {
+                          return [];
+                        }
+                        return [
+                          {
+                            categoryName: gesture.categoryName,
+                            displayName: gesture.displayName || undefined,
+                            score: gesture.score,
+                            index: typeof gesture.index === "number" ? gesture.index : -1,
+                          },
+                        ];
+                      }) ?? [];
+                    frameHands.push({
+                      landmarks: filteredHand,
+                      handedness: labels[handIndex],
+                      handednessScore:
+                        typeof handednessTop?.score === "number" ? handednessTop.score : 0,
+                      topGesture:
+                        gestureTop &&
+                        typeof gestureTop.categoryName === "string" &&
+                        typeof gestureTop.score === "number"
+                          ? {
+                              categoryName: gestureTop.categoryName,
+                              displayName: gestureTop.displayName || undefined,
+                              score: gestureTop.score,
+                              index: typeof gestureTop.index === "number" ? gestureTop.index : -1,
+                            }
+                          : null,
+                      gestures: gestureList,
+                    });
                   });
 
                   slots.forEach((slot, slotIndex) => {
@@ -543,6 +590,21 @@ export function HandLandmarkerOverlay({
                   console.warn("Gesture recognizer detect failed", error);
                 }
               }
+              publishGestureFrame({
+                timestampMs: now,
+                viewportWidth: targetWidth,
+                viewportHeight: targetHeight,
+                mirrored,
+                hands: frameHands,
+              });
+            } else {
+              publishGestureFrame({
+                timestampMs: now,
+                viewportWidth: targetWidth,
+                viewportHeight: targetHeight,
+                mirrored,
+                hands: [],
+              });
             }
           }
 
@@ -555,6 +617,13 @@ export function HandLandmarkerOverlay({
         onRequestDisable?.();
         stopStream();
         clearCanvas();
+        publishGestureFrame({
+          timestampMs: Date.now(),
+          viewportWidth: 0,
+          viewportHeight: 0,
+          mirrored,
+          hands: [],
+        });
         if (import.meta.env.DEV) {
           console.warn("Camera start failed", error);
         }
@@ -568,6 +637,13 @@ export function HandLandmarkerOverlay({
       stopLoop();
       stopStream();
       clearCanvas();
+      publishGestureFrame({
+        timestampMs: Date.now(),
+        viewportWidth: 0,
+        viewportHeight: 0,
+        mirrored,
+        hands: [],
+      });
       revokeModelUrl();
     };
   }, [
@@ -575,6 +651,7 @@ export function HandLandmarkerOverlay({
     drawLandmarks,
     enabled,
     ensureRecognizer,
+    mirrored,
     onPermissionChange,
     onRequestDisable,
     revokeModelUrl,

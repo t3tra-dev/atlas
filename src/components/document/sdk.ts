@@ -86,6 +86,34 @@ export interface NodeTypeDef {
   onDoubleClick?: (ctx: NodeDoubleClickContext) => void;
 }
 
+export type GestureLandmark = {
+  x: number;
+  y: number;
+};
+
+export type GestureCategory = {
+  categoryName: string;
+  displayName?: string;
+  score: number;
+  index: number;
+};
+
+export type GestureHand = {
+  landmarks: Array<GestureLandmark>;
+  handedness: "Left" | "Right" | "Unknown";
+  handednessScore: number;
+  topGesture: GestureCategory | null;
+  gestures: Array<GestureCategory>;
+};
+
+export type GestureFrame = {
+  timestampMs: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  mirrored: boolean;
+  hands: Array<GestureHand>;
+};
+
 export interface DocumentSDK {
   version: 3;
   react: typeof React;
@@ -105,6 +133,17 @@ export interface DocumentSDK {
   tool: ToolAPI;
   camera: CameraAPI;
   viewport: ViewportAPI;
+}
+
+export interface GestureRunContext {
+  sdk: DocumentSDK;
+  scheduleCameraCommit: (delayMs?: number) => void;
+}
+
+export abstract class GestureRegister {
+  abstract readonly id: string;
+  abstract onFrame(frame: GestureFrame, ctx: GestureRunContext): void;
+  onReset?(ctx: GestureRunContext): void;
 }
 
 const noopUi: DocumentSDK["ui"] = {

@@ -34,12 +34,14 @@ import {
 import { cn } from "@/lib/utils";
 
 import { createDocumentSDK } from "@/components/document/sdk";
-import type { NodeTypeDef } from "@/components/document/sdk";
+import type { GestureRegister, NodeTypeDef } from "@/components/document/sdk";
 import { createPluginHost } from "@/components/document/plugin-system";
 import { useDocumentStore } from "@/components/document/store";
 import { createDefaultDocument } from "@/components/document/default-doc";
 import { BuiltinPlugin } from "@/plugins/builtin";
+import { builtinGestureRegisters } from "@/plugins/builtin/gestures";
 import { buildMermaidElements } from "@/plugins/builtin/mermaid";
+import { subscribeGestureFrame } from "@/components/vision/gesture-frame-bus";
 
 import type { MenuEntry } from "@/plugin";
 
@@ -731,7 +733,10 @@ export function DocumentEditor({ className }: { className?: string }) {
         },
         camera: {
           get: () => camera,
-          set: (next) => setCameraState(next),
+          set: (next) => {
+            setCameraState(next);
+            scheduleCameraCommit(150);
+          },
         },
         viewport: {
           zoomTo: (nextScale) => zoomToCentered(nextScale),
@@ -746,10 +751,61 @@ export function DocumentEditor({ className }: { className?: string }) {
       selection,
       setDoc,
       setCameraState,
+      scheduleCameraCommit,
       tool,
       zoomToCentered,
     ],
   );
+
+  const sdkRef = React.useRef(sdk);
+  const scheduleCameraCommitRef = React.useRef(scheduleCameraCommit);
+  React.useEffect(() => {
+    sdkRef.current = sdk;
+  }, [sdk]);
+  React.useEffect(() => {
+    scheduleCameraCommitRef.current = scheduleCameraCommit;
+  }, [scheduleCameraCommit]);
+
+  const gestureRegistersRef = React.useRef<Array<GestureRegister> | null>(null);
+  if (!gestureRegistersRef.current) {
+    gestureRegistersRef.current = builtinGestureRegisters();
+  }
+
+  React.useEffect(() => {
+    const unsubscribe = subscribeGestureFrame((frame) => {
+      const registers = gestureRegistersRef.current ?? [];
+      const ctx = {
+        sdk: sdkRef.current,
+        scheduleCameraCommit: scheduleCameraCommitRef.current,
+      };
+      for (const register of registers) {
+        register.onFrame(frame, ctx);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      const registers = gestureRegistersRef.current ?? [];
+      const ctx = {
+        sdk: sdkRef.current,
+        scheduleCameraCommit: scheduleCameraCommitRef.current,
+      };
+      for (const register of registers) {
+        register.onReset?.(ctx);
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const registers = gestureRegistersRef.current ?? [];
+    const ctx = {
+      sdk: sdkRef.current,
+      scheduleCameraCommit: scheduleCameraCommitRef.current,
+    };
+    for (const register of registers) {
+      register.onReset?.(ctx);
+    }
+  }, [activeDoc?.id]);
 
   const pluginHost = React.useMemo(() => createPluginHost([BuiltinPlugin], { sdk }), [sdk]);
   const nodeRegistry = pluginHost.nodeRegistry;
