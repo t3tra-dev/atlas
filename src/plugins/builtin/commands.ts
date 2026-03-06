@@ -43,8 +43,8 @@ function deleteSelectedFromDoc(doc: DocumentModel, selection: Selection) {
 }
 
 export const BUILTIN_COMMANDS = {
-  fileExportJSON: "file.exportJSON",
-  fileImportJSON: "file.importJSON",
+  fileExportAtlas: "file.exportAtlas",
+  fileImportAtlas: "file.importAtlas",
   fileImportMermaid: "file.importMermaid",
   editDeleteSelected: "edit.deleteSelected",
   editClearSelection: "edit.clearSelection",
@@ -204,14 +204,14 @@ export function builtinCommands(
     ...nodeCommands,
     ...shapeCommands,
     {
-      id: BUILTIN_COMMANDS.fileExportJSON,
-      title: "JSON書き出し",
-      run: () => ctx.sdk.ui.openJSONSheet("export"),
+      id: BUILTIN_COMMANDS.fileExportAtlas,
+      title: "ATLAS書き出し",
+      run: () => ctx.sdk.ui.exportAtlas(),
     },
     {
-      id: BUILTIN_COMMANDS.fileImportJSON,
-      title: "JSON読み込み",
-      run: () => ctx.sdk.ui.openJSONSheet("import"),
+      id: BUILTIN_COMMANDS.fileImportAtlas,
+      title: "ATLAS読み込み",
+      run: () => ctx.sdk.ui.importAtlas(),
     },
     {
       id: BUILTIN_COMMANDS.fileImportMermaid,
@@ -334,7 +334,7 @@ export function builtinKeybindings(): Array<KeybindingContribution> {
   return [
     {
       keys: "mod+s",
-      command: BUILTIN_COMMANDS.fileExportJSON,
+      command: BUILTIN_COMMANDS.fileExportAtlas,
       preventDefault: true,
     },
     {

@@ -3,8 +3,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 import type { Camera, DocumentModel, DocNode, Selection, Tool } from "@/components/document/model";
-
-export type JSONSheetMode = "export" | "import";
+type Awaitable<T> = T | Promise<T>;
 
 export interface DocumentAPI {
   get: () => DocumentModel;
@@ -80,7 +79,7 @@ export interface NodeTypeDef {
   category?: string;
   placement?: NodePlacement;
 
-  create: (ctx: CreateNodeContext) => DocNode;
+  create: (ctx: CreateNodeContext) => Awaitable<DocNode>;
   render: (ctx: RenderNodeContext) => NodeRenderResult;
   inspector?: (ctx: NodeInspectorContext) => React.ReactNode;
   onDoubleClick?: (ctx: NodeDoubleClickContext) => void;
@@ -115,7 +114,7 @@ export type GestureFrame = {
 };
 
 export interface DocumentSDK {
-  version: 3;
+  version: 4;
   react: typeof React;
   cn: typeof cn;
 
@@ -124,7 +123,8 @@ export interface DocumentSDK {
    * Plugins can call these to trigger editor UI.
    */
   ui: {
-    openJSONSheet: (mode: JSONSheetMode) => void;
+    exportAtlas: () => Awaitable<void>;
+    importAtlas: () => Awaitable<void>;
     openMermaidImportDialog: () => void;
   };
 
@@ -147,7 +147,10 @@ export abstract class GestureRegister {
 }
 
 const noopUi: DocumentSDK["ui"] = {
-  openJSONSheet: () => {
+  exportAtlas: () => {
+    // no-op (useful for tests or non-editor contexts)
+  },
+  importAtlas: () => {
     // no-op (useful for tests or non-editor contexts)
   },
   openMermaidImportDialog: () => {
@@ -223,7 +226,7 @@ export function createDocumentSDK(opts?: {
   const viewport = opts?.viewport ?? noopViewport;
 
   return {
-    version: 3,
+    version: 4,
     react: React,
     cn,
     ui: { ...ui },

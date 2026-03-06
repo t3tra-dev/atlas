@@ -24,17 +24,16 @@ import {
   MenubarSubTrigger,
   MenubarTrigger,
 } from "@/components/ui/menubar";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
 import { createDocumentSDK } from "@/components/document/sdk";
 import type { GestureRegister, NodeTypeDef } from "@/components/document/sdk";
+import {
+  ATLAS_FILE_EXTENSION,
+  ATLAS_MIME_TYPE,
+  createAtlasBlob,
+  decodeAtlasDocument,
+} from "@/components/document/atlas-binary";
 import { createPluginHost } from "@/components/document/plugin-system";
 import { useDocumentStore } from "@/components/document/store";
 import { createDefaultDocument } from "@/components/document/default-doc";
@@ -209,102 +208,50 @@ function computeBoundsFromNodes(nodes: Record<string, DocNode>) {
   return bounds;
 }
 
-function safeParseDoc(
-  json: string,
-): { ok: true; doc: DocumentModel } | { ok: false; error: string } {
-  try {
-    const parsed = JSON.parse(json) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return { ok: false, error: "JSONがオブジェクトではありません" };
-    }
-    const p = parsed as Partial<DocumentModel>;
-    if (p.version !== 1) {
-      return { ok: false, error: "version=1のドキュメントのみ対応しています" };
-    }
-    if (!p.nodes || !p.nodeOrder || !p.edges || !p.edgeOrder || !p.canvas || !p.camera) {
-      return { ok: false, error: "必須フィールドが不足しています" };
-    }
+function sanitizeDocumentNameForFile(title: string): string {
+  const trimmed = title.trim();
+  const base = trimmed || "document";
+  const normalized = base
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replaceAll("\n", " ")
+    .trim();
+  return normalized || "document";
+}
 
-    // Light validation + small migrations (keeps it flexible for extension)
-    const migrated = p as DocumentModel;
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 0);
+}
 
-    // Migrate legacy edges: { type: 'arrow'|'doubleArrow'|'curve' } -> { shape, arrow }
-    const nextEdges: Record<string, DocEdge> = {};
-    for (const edgeId of migrated.edgeOrder) {
-      const rawEdge = (migrated.edges as Record<string, unknown>)[edgeId];
-      if (!rawEdge || typeof rawEdge !== "object") continue;
+function pickAtlasFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = `${ATLAS_FILE_EXTENSION},${ATLAS_MIME_TYPE},application/octet-stream`;
+    input.style.display = "none";
+    document.body.appendChild(input);
 
-      const edgeObj = rawEdge as Record<string, unknown>;
-
-      if (typeof edgeObj.shape === "string" && typeof edgeObj.arrow === "string") {
-        nextEdges[edgeId] = rawEdge as DocEdge;
-        continue;
-      }
-
-      const legacyType: unknown = edgeObj.type;
-      const base: DocEdge = {
-        id: String(edgeObj.id ?? edgeId),
-        from: String(edgeObj.from),
-        to: String(edgeObj.to),
-        shape: "line",
-        arrow: "none",
-        props: {
-          color: (() => {
-            const props = edgeObj.props;
-            const propsObj =
-              props && typeof props === "object" ? (props as Record<string, unknown>) : null;
-            return String(propsObj?.color ?? "#5a75bc");
-          })(),
-          width: (() => {
-            const props = edgeObj.props;
-            const propsObj =
-              props && typeof props === "object" ? (props as Record<string, unknown>) : null;
-            return Number(propsObj?.width ?? 2);
-          })(),
-          dash: (() => {
-            const props = edgeObj.props;
-            const propsObj =
-              props && typeof props === "object" ? (props as Record<string, unknown>) : null;
-            return propsObj?.dash === "dashed" ? "dashed" : "solid";
-          })(),
-          curve: (() => {
-            const props = edgeObj.props;
-            const propsObj =
-              props && typeof props === "object" ? (props as Record<string, unknown>) : null;
-            const raw = propsObj?.curve;
-            return typeof raw === "number" ? raw : undefined;
-          })(),
-        },
-      };
-
-      if (legacyType === "arrow") {
-        base.shape = "line";
-        base.arrow = "end";
-      } else if (legacyType === "doubleArrow") {
-        base.shape = "line";
-        base.arrow = "both";
-      } else if (legacyType === "curve") {
-        base.shape = "curve";
-        // Old implementation always rendered an end marker for curve.
-        base.arrow = "end";
-        base.props.curve = base.props.curve ?? 0.25;
-      }
-
-      nextEdges[edgeId] = base;
-    }
-
-    migrated.edges = nextEdges;
-
-    const normalizedTitle = typeof migrated.title === "string" ? migrated.title.trim() : "";
-    migrated.title = normalizedTitle || "インポート";
-
-    return { ok: true, doc: migrated };
-  } catch (e) {
-    return {
-      ok: false,
-      error: e instanceof Error ? e.message : "JSONの解析に失敗しました",
+    const done = (file: File | null) => {
+      input.removeEventListener("change", onChange);
+      input.remove();
+      resolve(file);
     };
-  }
+
+    const onChange = () => {
+      done(input.files?.[0] ?? null);
+    };
+
+    input.addEventListener("change", onChange, { once: true });
+    input.click();
+  });
 }
 
 function toDocPoint(e: React.PointerEvent, viewport: HTMLDivElement, camera: Camera) {
@@ -461,54 +408,6 @@ function ResizeHandle({
   );
 }
 
-function JSONSheet({
-  open,
-  mode,
-  value,
-  error,
-  onOpenChange,
-  onChange,
-  onPrimary,
-}: {
-  open: boolean;
-  mode: "export" | "import";
-  value: string;
-  error: string | null;
-  onOpenChange: (open: boolean) => void;
-  onChange: (value: string) => void;
-  onPrimary: () => void;
-}) {
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-[min(960px,calc(100vw-2rem))] sm:max-w-[960px]">
-        <SheetHeader>
-          <SheetTitle>{mode === "export" ? "JSON（書き出し）" : "JSON（読み込み）"}</SheetTitle>
-          <SheetDescription>
-            {mode === "export" ? "Cmd/Ctrl+Sでも開けます" : "貼り付けて読み込み"}
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="mt-3">
-          <textarea
-            className="h-[55vh] w-full resize-none rounded-md border bg-background p-3 font-mono text-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-          />
-          {error && <div className="mt-2 text-sm text-destructive">{error}</div>}
-          <div className="mt-3 flex justify-end gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              閉じる
-            </Button>
-            <Button onClick={onPrimary}>
-              {mode === "export" ? "クリップボードへコピー" : "読み込み"}
-            </Button>
-          </div>
-        </div>
-      </SheetContent>
-    </Sheet>
-  );
-}
-
 export function DocumentEditor({ className }: { className?: string }) {
   const viewportRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -590,11 +489,7 @@ export function DocumentEditor({ className }: { className?: string }) {
     y: number;
   }>(null);
 
-  const [jsonSheet, setJSONSheet] = React.useState<null | {
-    mode: "export" | "import";
-    error: string | null;
-  }>(null);
-  const [jsonDraft, setJSONDraft] = React.useState<string>("");
+  const [atlasIOError, setAtlasIOError] = React.useState<string | null>(null);
 
   const [mermaidDialog, setMermaidDialog] = React.useState<null | {
     error: string | null;
@@ -694,13 +589,41 @@ export function DocumentEditor({ className }: { className?: string }) {
     [scheduleCameraCommit, setCameraState, viewportSize.height, viewportSize.width],
   );
 
-  const openJSONSheet = React.useCallback(
-    (mode: "export" | "import") => {
-      setJSONDraft(JSON.stringify({ ...doc, camera }, null, 2));
-      setJSONSheet({ mode, error: null });
-    },
-    [camera, doc],
-  );
+  const exportAtlas = React.useCallback(async () => {
+    try {
+      const targetDoc: DocumentModel = { ...doc, camera };
+      const blob = createAtlasBlob(targetDoc);
+      const fileName = `${sanitizeDocumentNameForFile(targetDoc.title)}${ATLAS_FILE_EXTENSION}`;
+      downloadBlob(blob, fileName);
+      setAtlasIOError(null);
+    } catch (error) {
+      setAtlasIOError(
+        error instanceof Error
+          ? `ATLAS書き出しに失敗しました: ${error.message}`
+          : "ATLAS書き出しに失敗しました",
+      );
+    }
+  }, [camera, doc]);
+
+  const importAtlas = React.useCallback(async () => {
+    try {
+      const file = await pickAtlasFile();
+      if (!file) return;
+
+      const buffer = await file.arrayBuffer();
+      const parsed = decodeAtlasDocument(buffer);
+      setDoc(parsed);
+      setSelection({ kind: "none" });
+      setTool({ kind: "select" });
+      setAtlasIOError(null);
+    } catch (error) {
+      setAtlasIOError(
+        error instanceof Error
+          ? `ATLAS読み込みに失敗しました: ${error.message}`
+          : "ATLAS読み込みに失敗しました",
+      );
+    }
+  }, [setDoc]);
 
   const openMermaidImportDialog = React.useCallback(() => {
     const flowchartSource: string = `flowchart TD
@@ -716,7 +639,7 @@ export function DocumentEditor({ className }: { className?: string }) {
   const sdk = React.useMemo(
     () =>
       createDocumentSDK({
-        ui: { openJSONSheet, openMermaidImportDialog },
+        ui: { exportAtlas, importAtlas, openMermaidImportDialog },
         doc: {
           get: () => doc,
           set: (next) => setDoc(next),
@@ -746,7 +669,8 @@ export function DocumentEditor({ className }: { className?: string }) {
     [
       camera,
       doc,
-      openJSONSheet,
+      exportAtlas,
+      importAtlas,
       openMermaidImportDialog,
       selection,
       setDoc,
@@ -1132,46 +1056,61 @@ export function DocumentEditor({ className }: { className?: string }) {
           return;
         }
 
-        const node: DocNode = nodeDef.create({ id, x: point.x, y: point.y });
         const preset = tool.preset;
-        const nextNode: DocNode = preset
-          ? {
-              ...node,
-              ...(preset.w ? { w: preset.w } : null),
-              ...(preset.h ? { h: preset.h } : null),
-              ...(preset.props
-                ? {
-                    props: {
-                      ...(node.props as Record<string, unknown>),
-                      ...preset.props,
-                    },
-                  }
-                : null),
-            }
-          : node;
+        const finalizeAdd = (node: DocNode) => {
+          const nextNode: DocNode = preset
+            ? {
+                ...node,
+                ...(preset.w ? { w: preset.w } : null),
+                ...(preset.h ? { h: preset.h } : null),
+                ...(preset.props
+                  ? {
+                      props: {
+                        ...(node.props as Record<string, unknown>),
+                        ...preset.props,
+                      },
+                    }
+                  : null),
+              }
+            : node;
 
-        setDoc((d) => ({
-          ...d,
-          nodes: { ...d.nodes, [id]: nextNode },
-          nodeOrder: [...d.nodeOrder, id],
-        }));
-        setSelection({ kind: "node", id });
+          setDoc((d) => ({
+            ...d,
+            nodes: { ...d.nodes, [id]: nextNode },
+            nodeOrder: [...d.nodeOrder, id],
+          }));
+          setSelection({ kind: "node", id });
 
-        if (nodeDef.placement?.kind === "drag") {
-          setDrag({
-            kind: "drawShape",
-            nodeId: id,
-            nodeType: node.type,
-            pointerId: e.pointerId,
-            startWorldX: point.x,
-            startWorldY: point.y,
-            startClientX: e.clientX,
-            startClientY: e.clientY,
-          });
+          if (nodeDef.placement?.kind === "drag") {
+            setDrag({
+              kind: "drawShape",
+              nodeId: id,
+              nodeType: node.type,
+              pointerId: e.pointerId,
+              startWorldX: point.x,
+              startWorldY: point.y,
+              startClientX: e.clientX,
+              startClientY: e.clientY,
+            });
+            return;
+          }
+
+          setTool({ kind: "select" });
+        };
+
+        const maybeNode = nodeDef.create({ id, x: point.x, y: point.y });
+        if (typeof (maybeNode as Promise<DocNode>)?.then === "function") {
+          void (maybeNode as Promise<DocNode>)
+            .then((resolved) => {
+              finalizeAdd(resolved);
+            })
+            .catch(() => {
+              setTool({ kind: "select" });
+            });
           return;
         }
 
-        setTool({ kind: "select" });
+        finalizeAdd(maybeNode as DocNode);
       }
     },
     [beginPan, camera, nodeRegistry, setDoc, spaceDown, tool],
@@ -1254,42 +1193,6 @@ export function DocumentEditor({ className }: { className?: string }) {
       });
     },
     [doc.nodes, nodeRegistry, setDoc],
-  );
-
-  const docJSON = React.useMemo(() => JSON.stringify(doc, null, 2), [doc]);
-
-  const onExport = React.useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(docJSON);
-      setJSONSheet((s) => (s ? { ...s, error: null } : { mode: "export", error: null }));
-    } catch {
-      setJSONSheet((s) =>
-        s
-          ? {
-              ...s,
-              error: "クリップボードに書き込めませんでした（ブラウザ権限の可能性）",
-            }
-          : {
-              mode: "export",
-              error: "クリップボードに書き込めませんでした（ブラウザ権限の可能性）",
-            },
-      );
-    }
-  }, [docJSON]);
-
-  const onImportConfirm = React.useCallback(
-    (value: string) => {
-      const parsed = safeParseDoc(value);
-      if (!parsed.ok) {
-        setJSONSheet({ mode: "import", error: parsed.error });
-        return;
-      }
-      setDoc(parsed.doc);
-      setSelection({ kind: "none" });
-      setTool({ kind: "select" });
-      setJSONSheet(null);
-    },
-    [setDoc],
   );
 
   const onMermaidConfirm = React.useCallback(() => {
@@ -1732,7 +1635,7 @@ export function DocumentEditor({ className }: { className?: string }) {
               <div className="mt-3 text-xs text-muted-foreground">
                 クリックで選択、ドラッグで移動、右下ハンドルでリサイズ。
                 <br />
-                ダブルクリックでテキスト/画像URLを編集。
+                ダブルクリックでテキスト/画像ファイルを編集。
                 <br />
                 関係(矢印)は「関係ツール→始点ノード→終点ノード」。
               </div>
@@ -2143,32 +2046,17 @@ export function DocumentEditor({ className }: { className?: string }) {
             ) : null}
 
             <div className="mt-6">
-              <div className="text-xs font-medium text-muted-foreground">JSON</div>
+              <div className="text-xs font-medium text-muted-foreground">ATLAS</div>
               <div className="mt-1 text-xs text-muted-foreground">
-                保存はlocalStorage（暫定）。Cmd/Ctrl+Sで書き出し。
+                保存はIndexedDB（.atlasバイナリ）。Cmd/Ctrl+Sで書き出し。
               </div>
+              {atlasIOError ? (
+                <div className="mt-2 text-xs text-destructive">{atlasIOError}</div>
+              ) : null}
             </div>
           </div>
         }
       </div>
-
-      <JSONSheet
-        open={jsonSheet != null}
-        mode={jsonSheet?.mode ?? "export"}
-        value={jsonDraft}
-        error={jsonSheet?.error ?? null}
-        onOpenChange={(open) => {
-          if (!open) setJSONSheet(null);
-        }}
-        onChange={(v) => setJSONDraft(v)}
-        onPrimary={async () => {
-          if (jsonSheet?.mode === "export") {
-            await onExport();
-            return;
-          }
-          onImportConfirm(jsonDraft);
-        }}
-      />
 
       <Dialog
         open={mermaidDialog != null}

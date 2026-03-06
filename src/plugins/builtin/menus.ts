@@ -193,16 +193,16 @@ export function builtinFileMenu(): Array<MenuEntry> {
   return [
     {
       kind: "item",
-      id: "builtin.json.export",
-      label: "JSON書き出し",
+      id: "builtin.atlas.export",
+      label: "ATLAS書き出し",
       shortcut: "⌘S",
-      command: BUILTIN_COMMANDS.fileExportJSON,
+      command: BUILTIN_COMMANDS.fileExportAtlas,
     },
     {
       kind: "item",
-      id: "builtin.json.import",
-      label: "JSON読み込み",
-      command: BUILTIN_COMMANDS.fileImportJSON,
+      id: "builtin.atlas.import",
+      label: "ATLAS読み込み",
+      command: BUILTIN_COMMANDS.fileImportAtlas,
     },
     {
       kind: "item",

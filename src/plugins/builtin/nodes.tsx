@@ -1,5 +1,10 @@
+import * as React from "react";
 import { Input } from "@/components/ui/input";
 import { InputGroup } from "@/components/ui/input-group";
+import {
+  isEmbeddedBinaryMedia,
+  type EmbeddedBinaryMedia,
+} from "@/components/document/atlas-binary";
 
 import type { NodeTypeDef } from "@/components/document/sdk";
 import type { DocNodeBase } from "@/components/document/model";
@@ -17,7 +22,7 @@ export type TextNode = DocNodeBase<
 export type ImageNode = DocNodeBase<
   "image",
   {
-    src: string;
+    media: EmbeddedBinaryMedia;
     fit: "cover" | "contain";
     borderRadius: number;
   }
@@ -45,6 +50,111 @@ export type ShapeNode = DocNodeBase<
     radius?: number;
   }
 >;
+
+const PLACEHOLDER_IMAGE_URL = "https://placehold.co/320x220.png";
+const FALLBACK_IMAGE_BYTES = new Uint8Array([
+  137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0, 0,
+  0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31, 0, 3, 3, 2, 0, 239,
+  191, 105, 30, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+]);
+
+function createFallbackImageMedia(): EmbeddedBinaryMedia {
+  return {
+    kind: "embedded",
+    mimeType: "image/png",
+    bytes: new Uint8Array(FALLBACK_IMAGE_BYTES),
+  };
+}
+
+function ensureImageMedia(value: unknown): EmbeddedBinaryMedia {
+  if (!isEmbeddedBinaryMedia(value)) {
+    return createFallbackImageMedia();
+  }
+  return value;
+}
+
+async function fetchPlaceholderImageMedia(): Promise<EmbeddedBinaryMedia> {
+  if (typeof fetch !== "function") {
+    return createFallbackImageMedia();
+  }
+
+  try {
+    const response = await fetch(PLACEHOLDER_IMAGE_URL);
+    if (!response.ok) {
+      return createFallbackImageMedia();
+    }
+    const mimeType =
+      response.headers
+        .get("content-type")
+        ?.split(";")
+        .map((v) => v.trim())
+        .filter(Boolean)[0] ?? "image/png";
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length === 0) return createFallbackImageMedia();
+    return {
+      kind: "embedded",
+      mimeType,
+      bytes,
+    };
+  } catch {
+    return createFallbackImageMedia();
+  }
+}
+
+async function fileToEmbeddedMedia(file: File): Promise<EmbeddedBinaryMedia> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return {
+    kind: "embedded",
+    mimeType: file.type || "application/octet-stream",
+    bytes: bytes.length ? bytes : createFallbackImageMedia().bytes,
+  };
+}
+
+function pickImageFile(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.style.display = "none";
+    document.body.appendChild(input);
+
+    const done = (file: File | null) => {
+      input.removeEventListener("change", onChange);
+      input.remove();
+      resolve(file);
+    };
+
+    const onChange = () => {
+      done(input.files?.[0] ?? null);
+    };
+
+    input.addEventListener("change", onChange, { once: true });
+    input.click();
+  });
+}
+
+const mediaDataUrlCache = new WeakMap<Uint8Array, string>();
+
+function bytesToBase64(bytes: Uint8Array): string {
+  if (typeof btoa !== "function") return "";
+  const CHUNK_SIZE = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, i + CHUNK_SIZE);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function mediaToDataUrl(media: EmbeddedBinaryMedia): string {
+  const cached = mediaDataUrlCache.get(media.bytes);
+  if (cached) return cached;
+
+  const base64 = bytesToBase64(media.bytes);
+  const url = `data:${media.mimeType};base64,${base64}`;
+  mediaDataUrlCache.set(media.bytes, url);
+  return url;
+}
 
 function textNodeDef(): NodeTypeDef {
   return {
@@ -128,22 +238,26 @@ function imageNodeDef(): NodeTypeDef {
       defaultSize: { w: 320, h: 220 },
       minSize: { w: 24, h: 24 },
     },
-    create: ({ id, x, y }) => ({
-      id,
-      type: "image",
-      x: x - 160,
-      y: y - 110,
-      w: 320,
-      h: 220,
-      props: {
-        src: "https://placehold.co/320x220.png",
-        fit: "cover",
-        borderRadius: 14,
-      },
-    }),
+    create: async ({ id, x, y }) => {
+      const media = await fetchPlaceholderImageMedia();
+      return {
+        id,
+        type: "image",
+        x: x - 160,
+        y: y - 110,
+        w: 320,
+        h: 220,
+        props: {
+          media,
+          fit: "cover",
+          borderRadius: 14,
+        },
+      };
+    },
     render: ({ node, scale, cn }) => {
       if (node.type !== "image") return { ariaLabel: "image" };
       const p = node.props as ImageNode["props"];
+      const media = ensureImageMedia(p.media);
       return {
         ariaLabel: "image",
         className: cn("select-none overflow-hidden bg-muted"),
@@ -152,7 +266,7 @@ function imageNodeDef(): NodeTypeDef {
         },
         children: (
           <img
-            src={p.src}
+            src={mediaToDataUrl(media)}
             alt=""
             className="h-full w-full"
             style={{ objectFit: p.fit }}
@@ -163,31 +277,46 @@ function imageNodeDef(): NodeTypeDef {
     },
     inspector: ({ node, updateNode }) =>
       node.type !== "image" ? null : (
-        <InputGroup label="画像URL">
+        <InputGroup label="画像ファイル" description="image/* を埋め込み保存">
           <Input
-            value={(node.props as ImageNode["props"]).src}
+            type="file"
+            accept="image/*"
             onChange={(e) => {
-              const next = e.target.value;
-              updateNode((prev) => ({
-                ...prev,
-                props: {
-                  ...(prev.props as Record<string, unknown>),
-                  src: next,
-                },
-              }));
+              const file = e.target.files?.[0] ?? null;
+              e.currentTarget.value = "";
+              if (!file) return;
+
+              void (async () => {
+                const media = await fileToEmbeddedMedia(file);
+                updateNode((prev) => ({
+                  ...prev,
+                  props: {
+                    ...(prev.props as Record<string, unknown>),
+                    media,
+                  },
+                }));
+              })();
             }}
           />
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            {ensureImageMedia((node.props as ImageNode["props"]).media).mimeType}
+          </div>
         </InputGroup>
       ),
     onDoubleClick: ({ node, updateNode }) => {
       if (node.type !== "image") return;
-      const cur = node.props as ImageNode["props"];
-      const next = window.prompt("画像URLを編集", cur.src);
-      if (next == null) return;
-      updateNode((prev) => ({
-        ...prev,
-        props: { ...(prev.props as Record<string, unknown>), src: next },
-      }));
+      void (async () => {
+        const file = await pickImageFile();
+        if (!file) return;
+        const media = await fileToEmbeddedMedia(file);
+        updateNode((prev) => ({
+          ...prev,
+          props: {
+            ...(prev.props as Record<string, unknown>),
+            media,
+          },
+        }));
+      })();
     },
   };
 }
