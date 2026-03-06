@@ -1,11 +1,14 @@
 import { GestureRegister } from "@/components/document/sdk";
 import type { GestureFrame, GestureLandmark, GestureRunContext } from "@/components/document/sdk";
 import type { DocumentModel } from "@/components/document/model";
+import { orbitThreeCanvasByScreenDelta } from "@/plugins/builtin/three-canvas-control-bus";
 
 const THUMB_TIP_INDEX = 4;
 const INDEX_TIP_INDEX = 8;
 const PINCH_THRESHOLD_PX = 25;
 const MOVE_EPSILON = 1e-3;
+const ORBIT_MOVE_EPSILON_PX = 0.5;
+const THREE_CANVAS_HEADER_HEIGHT_PX = 32;
 const CLOSED_FIST_LABEL = "Closed_Fist";
 const CLOSED_FIST_INDEX = 1;
 const MIN_CLOSED_FIST_SCORE = 0.5;
@@ -18,8 +21,11 @@ type Point = {
 type PinchMeasurement = {
   centerNodeId: string | null;
   centerWorld: Point;
+  centerScreen: Point;
   pinchDistancePx: number;
 };
+
+type PinchActionMode = "move-node" | "orbit-three-canvas";
 
 function toScreenPoint(landmark: GestureLandmark, frame: GestureFrame): Point {
   const x = frame.mirrored ? 1 - landmark.x : landmark.x;
@@ -65,7 +71,9 @@ function findTopNodeIdAtPoint(doc: DocumentModel, point: Point): string | null {
 export class PinchDragNodeGestureRegister extends GestureRegister {
   readonly id = "builtin.gesture.pinch-drag-node";
   private activeNodeId: string | null = null;
+  private activeMode: PinchActionMode | null = null;
   private previousCenterWorld: Point | null = null;
+  private previousCenterScreen: Point | null = null;
 
   private isClosedFist(hand: GestureFrame["hands"][number]) {
     return hand.gestures.some((gesture) => {
@@ -78,7 +86,9 @@ export class PinchDragNodeGestureRegister extends GestureRegister {
 
   private resetState() {
     this.activeNodeId = null;
+    this.activeMode = null;
     this.previousCenterWorld = null;
+    this.previousCenterScreen = null;
   }
 
   private collectMeasurements(
@@ -111,11 +121,29 @@ export class PinchDragNodeGestureRegister extends GestureRegister {
       measurements.push({
         centerNodeId,
         centerWorld,
+        centerScreen: {
+          x: (thumbScreen.x + indexScreen.x) / 2,
+          y: (thumbScreen.y + indexScreen.y) / 2,
+        },
         pinchDistancePx,
       });
     }
 
     return measurements;
+  }
+
+  private resolveActionMode(
+    node: DocumentModel["nodes"][string],
+    pointWorld: Point,
+    cameraScale: number,
+  ): PinchActionMode {
+    if (node.type !== "three-canvas") return "move-node";
+    const headerWorldHeight = THREE_CANVAS_HEADER_HEIGHT_PX / Math.max(0.01, cameraScale);
+    const headerBottomY = Math.min(node.y + node.h, node.y + headerWorldHeight);
+    if (pointWorld.y <= headerBottomY) {
+      return "move-node";
+    }
+    return "orbit-three-canvas";
   }
 
   onFrame(frame: GestureFrame, ctx: GestureRunContext) {
@@ -137,10 +165,25 @@ export class PinchDragNodeGestureRegister extends GestureRegister {
     }
 
     const targetNodeId = candidate.centerNodeId;
+    const doc = ctx.sdk.doc.get();
+    const targetNode = doc.nodes[targetNodeId];
+    if (!targetNode) {
+      this.resetState();
+      return;
+    }
+    const camera = ctx.sdk.camera.get();
+    const mode = this.resolveActionMode(targetNode, candidate.centerWorld, camera.scale);
 
-    if (this.activeNodeId !== targetNodeId || !this.previousCenterWorld) {
+    if (
+      this.activeNodeId !== targetNodeId ||
+      this.activeMode !== mode ||
+      !this.previousCenterWorld ||
+      !this.previousCenterScreen
+    ) {
       this.activeNodeId = targetNodeId;
+      this.activeMode = mode;
       this.previousCenterWorld = candidate.centerWorld;
+      this.previousCenterScreen = candidate.centerScreen;
       ctx.sdk.tool.set({ kind: "select" });
       ctx.sdk.selection.set({ kind: "node", id: targetNodeId });
       return;
@@ -148,7 +191,22 @@ export class PinchDragNodeGestureRegister extends GestureRegister {
 
     const dx = candidate.centerWorld.x - this.previousCenterWorld.x;
     const dy = candidate.centerWorld.y - this.previousCenterWorld.y;
+    const dxScreen = candidate.centerScreen.x - this.previousCenterScreen.x;
+    const dyScreen = candidate.centerScreen.y - this.previousCenterScreen.y;
     this.previousCenterWorld = candidate.centerWorld;
+    this.previousCenterScreen = candidate.centerScreen;
+
+    if (this.activeMode === "orbit-three-canvas") {
+      if (
+        Math.abs(dxScreen) < ORBIT_MOVE_EPSILON_PX &&
+        Math.abs(dyScreen) < ORBIT_MOVE_EPSILON_PX
+      ) {
+        return;
+      }
+      orbitThreeCanvasByScreenDelta(targetNodeId, dxScreen, dyScreen);
+      ctx.sdk.selection.set({ kind: "node", id: targetNodeId });
+      return;
+    }
 
     if (Math.abs(dx) < MOVE_EPSILON && Math.abs(dy) < MOVE_EPSILON) {
       return;

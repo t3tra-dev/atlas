@@ -5,6 +5,7 @@ import {
   isEmbeddedBinaryMedia,
   type EmbeddedBinaryMedia,
 } from "@/components/document/atlas-binary";
+import { ThreeCanvasView } from "@/plugins/builtin/three-canvas-view";
 
 import type { NodeTypeDef } from "@/components/document/sdk";
 import type { DocNodeBase } from "@/components/document/model";
@@ -51,6 +52,15 @@ export type ShapeNode = DocNodeBase<
   }
 >;
 
+export type ThreeCanvasNode = DocNodeBase<
+  "three-canvas",
+  {
+    model: EmbeddedBinaryMedia | null;
+    fileName: string;
+    background: string;
+  }
+>;
+
 const PLACEHOLDER_IMAGE_URL = "https://placehold.co/320x220.png";
 const FALLBACK_IMAGE_BYTES = new Uint8Array([
   137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0, 0,
@@ -70,6 +80,12 @@ function ensureImageMedia(value: unknown): EmbeddedBinaryMedia {
   if (!isEmbeddedBinaryMedia(value)) {
     return createFallbackImageMedia();
   }
+  return value;
+}
+
+function ensureOptionalMedia(value: unknown): EmbeddedBinaryMedia | null {
+  if (value == null) return null;
+  if (!isEmbeddedBinaryMedia(value)) return null;
   return value;
 }
 
@@ -101,20 +117,21 @@ async function fetchPlaceholderImageMedia(): Promise<EmbeddedBinaryMedia> {
   }
 }
 
-async function fileToEmbeddedMedia(file: File): Promise<EmbeddedBinaryMedia> {
+async function fileToEmbeddedMedia(file: File): Promise<EmbeddedBinaryMedia | null> {
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!bytes.length) return null;
   return {
     kind: "embedded",
     mimeType: file.type || "application/octet-stream",
-    bytes: bytes.length ? bytes : createFallbackImageMedia().bytes,
+    bytes,
   };
 }
 
-function pickImageFile(): Promise<File | null> {
+function pickFile(accept: string): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "image/*";
+    input.accept = accept;
     input.style.display = "none";
     document.body.appendChild(input);
 
@@ -131,6 +148,32 @@ function pickImageFile(): Promise<File | null> {
     input.addEventListener("change", onChange, { once: true });
     input.click();
   });
+}
+
+function pickImageFile(): Promise<File | null> {
+  return pickFile("image/*");
+}
+
+function pickModelFile(): Promise<File | null> {
+  return pickFile(".gltf,.glb,model/gltf+json,model/gltf-binary");
+}
+
+function inferModelMimeType(file: File): string {
+  if (file.type?.trim()) return file.type;
+  const lowered = file.name.toLowerCase();
+  if (lowered.endsWith(".gltf")) return "model/gltf+json";
+  if (lowered.endsWith(".glb")) return "model/gltf-binary";
+  return "application/octet-stream";
+}
+
+async function modelFileToMedia(file: File): Promise<EmbeddedBinaryMedia | null> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!bytes.length) return null;
+  return {
+    kind: "embedded",
+    mimeType: inferModelMimeType(file),
+    bytes,
+  };
 }
 
 const mediaDataUrlCache = new WeakMap<Uint8Array, string>();
@@ -288,6 +331,7 @@ function imageNodeDef(): NodeTypeDef {
 
               void (async () => {
                 const media = await fileToEmbeddedMedia(file);
+                if (!media) return;
                 updateNode((prev) => ({
                   ...prev,
                   props: {
@@ -309,11 +353,136 @@ function imageNodeDef(): NodeTypeDef {
         const file = await pickImageFile();
         if (!file) return;
         const media = await fileToEmbeddedMedia(file);
+        if (!media) return;
         updateNode((prev) => ({
           ...prev,
           props: {
             ...(prev.props as Record<string, unknown>),
             media,
+          },
+        }));
+      })();
+    },
+  };
+}
+
+function threeCanvasNodeDef(): NodeTypeDef {
+  return {
+    type: "three-canvas",
+    title: "3D Canvas",
+    category: "追加",
+    placement: {
+      kind: "click",
+      defaultSize: { w: 460, h: 320 },
+      minSize: { w: 220, h: 180 },
+    },
+    create: ({ id, x, y }) => ({
+      id,
+      type: "three-canvas",
+      x: x - 230,
+      y: y - 160,
+      w: 460,
+      h: 320,
+      props: {
+        model: null,
+        fileName: "No model",
+        background: "#0b1220",
+      },
+    }),
+    render: ({ node, scale, cn }) => {
+      if (node.type !== "three-canvas") return { ariaLabel: "3D Canvas" };
+      const p = node.props as ThreeCanvasNode["props"];
+      const model = ensureOptionalMedia(p.model);
+      const fileName =
+        typeof p.fileName === "string" && p.fileName.trim() ? p.fileName : "No model";
+      const background =
+        typeof p.background === "string" && p.background.trim() ? p.background : "#0b1220";
+
+      return {
+        ariaLabel: "3D Canvas",
+        className: cn("overflow-hidden bg-transparent"),
+        style: {
+          borderRadius: 14 * scale,
+          border: `${Math.max(1, scale)}px solid var(--border)`,
+        },
+        children: (
+          <div className="flex h-full w-full flex-col overflow-hidden rounded-[inherit] bg-transparent">
+            <div className="flex h-8 shrink-0 items-center border-b border-border/80 bg-background/55 px-2 text-[11px] font-medium text-foreground">
+              <span className="truncate">{fileName}</span>
+            </div>
+            <div className="min-h-0 flex-1">
+              <ThreeCanvasView nodeId={node.id} model={model} background={background} />
+            </div>
+          </div>
+        ),
+      };
+    },
+    inspector: ({ node, updateNode }) =>
+      node.type !== "three-canvas" ? null : (
+        <div className="space-y-3">
+          <InputGroup label="3Dモデル(glTF)" description="gltf/glb を埋め込み保存">
+            <Input
+              type="file"
+              accept=".gltf,.glb,model/gltf+json,model/gltf-binary"
+              onChange={(e) => {
+                const file = e.target.files?.[0] ?? null;
+                e.currentTarget.value = "";
+                if (!file) return;
+
+                void (async () => {
+                  const model = await modelFileToMedia(file);
+                  if (!model) return;
+                  updateNode((prev) => ({
+                    ...prev,
+                    props: {
+                      ...(prev.props as Record<string, unknown>),
+                      model,
+                      fileName: file.name,
+                    },
+                  }));
+                })();
+              }}
+            />
+            <div className="mt-1 text-[11px] text-muted-foreground">
+              ファイル: {(node.props as ThreeCanvasNode["props"]).fileName || "No model"}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              MIME:{" "}
+              {ensureOptionalMedia((node.props as ThreeCanvasNode["props"]).model)?.mimeType ?? "-"}
+            </div>
+          </InputGroup>
+
+          <InputGroup label="背景色">
+            <Input
+              type="color"
+              value={(node.props as ThreeCanvasNode["props"]).background}
+              onChange={(e) => {
+                const next = e.target.value;
+                updateNode((prev) => ({
+                  ...prev,
+                  props: {
+                    ...(prev.props as Record<string, unknown>),
+                    background: next,
+                  },
+                }));
+              }}
+            />
+          </InputGroup>
+        </div>
+      ),
+    onDoubleClick: ({ node, updateNode }) => {
+      if (node.type !== "three-canvas") return;
+      void (async () => {
+        const file = await pickModelFile();
+        if (!file) return;
+        const model = await modelFileToMedia(file);
+        if (!model) return;
+        updateNode((prev) => ({
+          ...prev,
+          props: {
+            ...(prev.props as Record<string, unknown>),
+            model,
+            fileName: file.name,
           },
         }));
       })();
@@ -609,5 +778,5 @@ function shapeNodeDef(): NodeTypeDef {
 }
 
 export function builtinNodes(): Array<NodeTypeDef> {
-  return [textNodeDef(), imageNodeDef(), shapeNodeDef()];
+  return [textNodeDef(), imageNodeDef(), threeCanvasNodeDef(), shapeNodeDef()];
 }

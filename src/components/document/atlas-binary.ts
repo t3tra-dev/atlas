@@ -26,6 +26,16 @@ type PackedMedia = {
   bytes: Uint8Array;
 };
 
+type NodeMediaFieldSchema = {
+  propKey: string;
+  required: boolean;
+};
+
+const NODE_MEDIA_SCHEMA: Record<string, Array<NodeMediaFieldSchema>> = {
+  image: [{ propKey: "media", required: true }],
+  "three-canvas": [{ propKey: "model", required: false }],
+};
+
 function assert(cond: unknown, message: string): asserts cond {
   if (!cond) {
     throw new Error(message);
@@ -76,54 +86,84 @@ function normalizeEmbeddedBinaryMedia(value: unknown): EmbeddedBinaryMedia | nul
 }
 
 function serializeNode(node: DocNode, media: PackedMedia[]): DocNode {
-  if (node.type !== "image") return node;
+  const mediaFields = NODE_MEDIA_SCHEMA[node.type];
+  if (!mediaFields?.length) return node;
   const props = asObjectRecord(node.props);
-  assert(props, "imageノードのpropsが不正です");
-  const normalizedMedia = normalizeEmbeddedBinaryMedia(props.media);
-  assert(normalizedMedia, "imageノードのmediaが不正です");
+  assert(props, `${node.type}ノードのpropsが不正です`);
+  const nextProps: Record<string, unknown> = { ...props };
 
-  const mediaIndex = media.length;
-  media.push({
-    mimeType: normalizedMedia.mimeType,
-    bytes: normalizedMedia.bytes,
-  });
+  for (const field of mediaFields) {
+    const rawMedia = props[field.propKey];
+    if (rawMedia == null) {
+      assert(!field.required, `${node.type}ノードの${field.propKey}が不正です`);
+      nextProps[field.propKey] = null;
+      continue;
+    }
 
-  const mediaRef: SerializedEmbeddedMediaRef = {
-    kind: "embedded",
-    mimeType: normalizedMedia.mimeType,
-    mediaIndex,
-  };
+    const normalizedMedia = normalizeEmbeddedBinaryMedia(rawMedia);
+    if (!normalizedMedia) {
+      assert(!field.required, `${node.type}ノードの${field.propKey}が不正です`);
+      nextProps[field.propKey] = null;
+      continue;
+    }
+
+    const mediaIndex = media.length;
+    media.push({
+      mimeType: normalizedMedia.mimeType,
+      bytes: normalizedMedia.bytes,
+    });
+
+    nextProps[field.propKey] = {
+      kind: "embedded",
+      mimeType: normalizedMedia.mimeType,
+      mediaIndex,
+    } satisfies SerializedEmbeddedMediaRef;
+  }
 
   return {
     ...node,
     props: {
-      ...props,
-      media: mediaRef,
+      ...nextProps,
     },
   };
 }
 
 function deserializeNode(node: DocNode, media: PackedMedia[]): DocNode {
-  if (node.type !== "image") return node;
+  const mediaFields = NODE_MEDIA_SCHEMA[node.type];
+  if (!mediaFields?.length) return node;
   const props = asObjectRecord(node.props);
-  assert(props, "imageノードのpropsが不正です");
+  assert(props, `${node.type}ノードのpropsが不正です`);
+  const nextProps: Record<string, unknown> = { ...props };
 
-  const mediaRef = asObjectRecord(props.media);
-  assert(mediaRef && mediaRef.kind === "embedded", "imageノードのmedia参照が不正です");
-  const mediaIndex = mediaRef.mediaIndex;
-  assert(Number.isInteger(mediaIndex), "imageノードのmediaIndexが不正です");
-  const packed = media[Number(mediaIndex)];
-  assert(packed, "imageノードのmediaIndexが範囲外です");
+  for (const field of mediaFields) {
+    const rawMediaRef = props[field.propKey];
+    if (rawMediaRef == null) {
+      assert(!field.required, `${node.type}ノードの${field.propKey}参照が不正です`);
+      nextProps[field.propKey] = null;
+      continue;
+    }
+
+    const mediaRef = asObjectRecord(rawMediaRef);
+    assert(
+      mediaRef && mediaRef.kind === "embedded",
+      `${node.type}ノードの${field.propKey}参照が不正です`,
+    );
+    const mediaIndex = mediaRef.mediaIndex;
+    assert(Number.isInteger(mediaIndex), `${node.type}ノードの${field.propKey}Indexが不正です`);
+    const packed = media[Number(mediaIndex)];
+    assert(packed, `${node.type}ノードの${field.propKey}Indexが範囲外です`);
+
+    nextProps[field.propKey] = {
+      kind: "embedded",
+      mimeType: packed.mimeType,
+      bytes: new Uint8Array(packed.bytes),
+    } satisfies EmbeddedBinaryMedia;
+  }
 
   return {
     ...node,
     props: {
-      ...props,
-      media: {
-        kind: "embedded",
-        mimeType: packed.mimeType,
-        bytes: new Uint8Array(packed.bytes),
-      } satisfies EmbeddedBinaryMedia,
+      ...nextProps,
     },
   };
 }
