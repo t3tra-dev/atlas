@@ -5,7 +5,7 @@ import { orbitThreeCanvasByScreenDelta } from "@/plugins/builtin/three-canvas-co
 
 const THUMB_TIP_INDEX = 4;
 const INDEX_TIP_INDEX = 8;
-const PINCH_THRESHOLD_PX = 25;
+const PINCH_THRESHOLD_PX = 30;
 const MOVE_EPSILON = 1e-3;
 const ORBIT_MOVE_EPSILON_PX = 0.5;
 const THREE_CANVAS_HEADER_HEIGHT_PX = 32;
