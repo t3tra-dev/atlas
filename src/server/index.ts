@@ -24,6 +24,8 @@ app.get("*", (c) => {
   return c.text("dist/index.html not found.", 500);
 });
 
+export default app;
+
 const port = Number(process.env.PORT ?? 3000);
 const server = serve({ fetch: app.fetch, port });
 console.log(`\ndev server started at http://localhost:${port}`);
