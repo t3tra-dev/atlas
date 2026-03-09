@@ -6,7 +6,8 @@
     "command": "npm run build",
     "cwd": "."
   },
-  "site": {
-    "bucket": "dist"
+  "assets": {
+    "directory": "dist",
+    "binding": "ASSETS"
   }
 }
