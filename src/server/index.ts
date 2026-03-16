@@ -15,9 +15,7 @@ app.get("*", async (c) => {
   const url = new URL(c.req.url);
 
   // Serve static assets through Cloudflare's ASSETS binding
-  const assetResponse = await c.env.ASSETS.fetch(
-    new Request(url, { method: c.req.method })
-  );
+  const assetResponse = await c.env.ASSETS.fetch(new Request(url, { method: c.req.method }));
 
   // If the asset is found and successful, return it
   if (assetResponse.status !== 404) {
@@ -26,7 +24,7 @@ app.get("*", async (c) => {
 
   // Return index.html for SPA routing
   const indexResponse = await c.env.ASSETS.fetch(
-    new Request(new URL("/index.html", url), { method: "GET" })
+    new Request(new URL("/index.html", url), { method: "GET" }),
   );
 
   if (indexResponse.ok) {

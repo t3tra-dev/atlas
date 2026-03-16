@@ -4,10 +4,10 @@
   "main": "src/server/index.js",
   "build": {
     "command": "npm run build",
-    "cwd": "."
+    "cwd": ".",
   },
   "assets": {
     "directory": "dist",
-    "binding": "ASSETS"
-  }
+    "binding": "ASSETS",
+  },
 }

@@ -34,6 +34,7 @@ import {
   createAtlasBlob,
   decodeAtlasDocument,
 } from "@/components/document/atlas-binary";
+import { LockedRectGesturePreview } from "@/components/document/locked-rect-gesture-preview";
 import { createPluginHost } from "@/components/document/plugin-system";
 import { useDocumentStore } from "@/components/document/store";
 import { createDefaultDocument } from "@/components/document/default-doc";
@@ -1619,6 +1620,11 @@ export function DocumentEditor({ className }: { className?: string }) {
                 />
               );
             })}
+
+            <LockedRectGesturePreview
+              viewportWidth={viewportSize.width}
+              viewportHeight={viewportSize.height}
+            />
           </div>
         </div>
 
