@@ -13,6 +13,7 @@ dist-ssr
 *.local
 
 sample_data/
+src/server/index.js
 
 # Editor directories and files
 .vscode/*
@@ -24,3 +25,4 @@ sample_data/
 *.njsproj
 *.sln
 *.sw?
+.wrangler/
