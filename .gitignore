@@ -13,6 +13,7 @@ dist-ssr
 *.local
 
 sample_data/
+refs/
 src/server/index.js
 
 # Editor directories and files
