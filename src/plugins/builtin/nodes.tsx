@@ -5,10 +5,14 @@ import {
   isEmbeddedBinaryMedia,
   type EmbeddedBinaryMedia,
 } from "@/components/document/atlas-binary";
-import { ThreeCanvasView } from "@/plugins/builtin/three-canvas-view";
 
 import type { NodeTypeDef } from "@/components/document/sdk";
 import type { DocNodeBase } from "@/components/document/model";
+
+const LazyThreeCanvasView = React.lazy(async () => {
+  const mod = await import("@/plugins/builtin/three-canvas-view");
+  return { default: mod.ThreeCanvasView };
+});
 
 export type TextNode = DocNodeBase<
   "text",
@@ -411,7 +415,11 @@ function threeCanvasNodeDef(): NodeTypeDef {
               <span className="truncate">{fileName}</span>
             </div>
             <div className="min-h-0 flex-1">
-              <ThreeCanvasView nodeId={node.id} model={model} background={background} />
+              <React.Suspense
+                fallback={<div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">3Dビューを読み込み中...</div>}
+              >
+                <LazyThreeCanvasView nodeId={node.id} model={model} background={background} />
+              </React.Suspense>
             </div>
           </div>
         ),

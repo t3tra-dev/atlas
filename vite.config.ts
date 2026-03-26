@@ -14,6 +14,7 @@ export default defineConfig({
   build: {
     // Client-side SPA build output
     outDir: "dist",
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       // Multiple entry points: HTML for client, TS for server
       input: {
@@ -30,6 +31,15 @@ export default defineConfig({
         },
         chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash][extname]",
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@mediapipe/tasks-vision")) return "mediapipe";
+          if (id.includes("three/examples/")) return "three-examples";
+          if (id.includes("/node_modules/three/")) return "three-core";
+          if (id.includes("@radix-ui") || id.includes("lucide-react")) return "ui-vendor";
+          if (id.includes("react") || id.includes("scheduler")) return "react-vendor";
+          return undefined;
+        },
       },
       // Treat Hono and Node dependencies as external (don't bundle them)
       external: ["hono", "hono/cloudflare-workers"],
