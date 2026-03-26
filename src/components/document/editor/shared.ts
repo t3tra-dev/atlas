@@ -263,7 +263,11 @@ export function pickAtlasFile(): Promise<File | null> {
   });
 }
 
-export function toDocPoint(e: { clientX: number; clientY: number }, viewport: HTMLDivElement, camera: Camera) {
+export function toDocPoint(
+  e: { clientX: number; clientY: number },
+  viewport: HTMLDivElement,
+  camera: Camera,
+) {
   const rect = viewport.getBoundingClientRect();
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;

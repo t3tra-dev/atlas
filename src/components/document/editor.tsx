@@ -104,9 +104,7 @@ export function DocumentEditor({ className }: { className?: string }) {
   const [drag, setDrag] = React.useState<DragState>({ kind: "none" });
   const [spaceDown, setSpaceDown] = React.useState(false);
   const [chatOpen, setChatOpen] = React.useState(false);
-  const [connectPreview, setConnectPreview] = React.useState<null | { x: number; y: number }>(
-    null,
-  );
+  const [connectPreview, setConnectPreview] = React.useState<null | { x: number; y: number }>(null);
 
   const {
     atlasIOError,
@@ -250,29 +248,23 @@ export function DocumentEditor({ className }: { className?: string }) {
     executeCommandRef.current = executeCommand;
   }, [executeCommand, keybindings]);
 
-  const {
-    beginMove,
-    beginResize,
-    beginPan,
-    onCanvasPointerDown,
-    onNodeClick,
-    onNodeDoubleClick,
-  } = useCanvasInteractions({
-    doc,
-    camera,
-    drag,
-    tool,
-    spaceDown,
-    getViewportElement: React.useCallback(() => viewportRef.current, []),
-    nodeRegistry,
-    setDoc,
-    setSelection,
-    setTool,
-    setDrag,
-    setConnectPreview,
-    setCameraState,
-    scheduleCameraCommit,
-  });
+  const { beginMove, beginResize, beginPan, onCanvasPointerDown, onNodeClick, onNodeDoubleClick } =
+    useCanvasInteractions({
+      doc,
+      camera,
+      drag,
+      tool,
+      spaceDown,
+      getViewportElement: React.useCallback(() => viewportRef.current, []),
+      nodeRegistry,
+      setDoc,
+      setSelection,
+      setTool,
+      setDrag,
+      setConnectPreview,
+      setCameraState,
+      scheduleCameraCommit,
+    });
 
   const selectedNodeId = selection.kind === "node" ? selection.id : null;
   const selectedEdgeId = selection.kind === "edge" ? selection.id : null;

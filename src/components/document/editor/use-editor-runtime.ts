@@ -118,7 +118,10 @@ export function useEditorRuntime({
     scheduleCameraCommitRef.current = scheduleCameraCommit;
   }, [scheduleCameraCommit]);
 
-  const gestureRegisters = React.useMemo<Array<GestureRegister>>(() => builtinGestureRegisters(), []);
+  const gestureRegisters = React.useMemo<Array<GestureRegister>>(
+    () => builtinGestureRegisters(),
+    [],
+  );
 
   React.useEffect(() => {
     const unsubscribe = subscribeGestureFrame((frame) => {

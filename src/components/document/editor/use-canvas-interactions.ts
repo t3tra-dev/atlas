@@ -1,6 +1,14 @@
 import * as React from "react";
 
-import type { Camera, DocEdge, DocNode, DocumentModel, DragState, Selection, Tool } from "@/components/document/model";
+import type {
+  Camera,
+  DocEdge,
+  DocNode,
+  DocumentModel,
+  DragState,
+  Selection,
+  Tool,
+} from "@/components/document/model";
 import type { NodeRegistry } from "@/components/document/plugin-system";
 import { clamp, getNodeCenter, newId, toDocPoint } from "@/components/document/editor/shared";
 
@@ -34,7 +42,9 @@ export function useCanvasInteractions({
   setTool: React.Dispatch<React.SetStateAction<Tool>>;
   setDrag: React.Dispatch<React.SetStateAction<DragState>>;
   setConnectPreview: React.Dispatch<React.SetStateAction<null | { x: number; y: number }>>;
-  setCameraState: React.Dispatch<React.SetStateAction<Camera>> | ((next: Camera | ((prev: Camera) => Camera)) => void);
+  setCameraState:
+    | React.Dispatch<React.SetStateAction<Camera>>
+    | ((next: Camera | ((prev: Camera) => Camera)) => void);
   scheduleCameraCommit: (delayMs?: number) => void;
 }) {
   const beginMove = React.useCallback(
@@ -261,7 +271,17 @@ export function useCanvasInteractions({
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [camera.scale, drag, nodeRegistry, scheduleCameraCommit, setCameraState, setDoc, setDrag, setSelection, setTool]);
+  }, [
+    camera.scale,
+    drag,
+    nodeRegistry,
+    scheduleCameraCommit,
+    setCameraState,
+    setDoc,
+    setDrag,
+    setSelection,
+    setTool,
+  ]);
 
   const onCanvasPointerDown = React.useCallback(
     (e: React.PointerEvent) => {
@@ -345,7 +365,18 @@ export function useCanvasInteractions({
         finalizeAdd(maybeNode as DocNode);
       }
     },
-    [beginPan, camera, getViewportElement, nodeRegistry, setDoc, setDrag, setSelection, setTool, spaceDown, tool],
+    [
+      beginPan,
+      camera,
+      getViewportElement,
+      nodeRegistry,
+      setDoc,
+      setDrag,
+      setSelection,
+      setTool,
+      spaceDown,
+      tool,
+    ],
   );
 
   const onNodeClick = React.useCallback(

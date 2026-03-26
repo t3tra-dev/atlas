@@ -91,7 +91,9 @@ export function DocumentEditorToolbar({
       <Menubar className="h-9">
         <MenubarMenu>
           <MenubarTrigger>追加</MenubarTrigger>
-          <MenubarContent>{renderMenuEntries(addMenuEntries, "add", onExecuteCommand)}</MenubarContent>
+          <MenubarContent>
+            {renderMenuEntries(addMenuEntries, "add", onExecuteCommand)}
+          </MenubarContent>
         </MenubarMenu>
 
         <MenubarMenu>
@@ -108,12 +110,16 @@ export function DocumentEditorToolbar({
 
         <MenubarMenu>
           <MenubarTrigger>編集</MenubarTrigger>
-          <MenubarContent>{renderMenuEntries(editMenuEntries, "edit", onExecuteCommand)}</MenubarContent>
+          <MenubarContent>
+            {renderMenuEntries(editMenuEntries, "edit", onExecuteCommand)}
+          </MenubarContent>
         </MenubarMenu>
 
         <MenubarMenu>
           <MenubarTrigger>表示</MenubarTrigger>
-          <MenubarContent>{renderMenuEntries(viewMenuEntries, "view", onExecuteCommand)}</MenubarContent>
+          <MenubarContent>
+            {renderMenuEntries(viewMenuEntries, "view", onExecuteCommand)}
+          </MenubarContent>
         </MenubarMenu>
       </Menubar>
 
@@ -128,15 +134,28 @@ export function DocumentEditorToolbar({
       </div>
 
       <div className="ml-2 flex items-center gap-1">
-        <Button size="sm" variant={tool.kind === "select" ? "default" : "outline"} onClick={onSelectTool}>
+        <Button
+          size="sm"
+          variant={tool.kind === "select" ? "default" : "outline"}
+          onClick={onSelectTool}
+        >
           選択
         </Button>
-        {tool.kind === "add" ? <div className="text-xs text-muted-foreground">配置モード</div> : null}
-        {tool.kind === "connect" ? <div className="text-xs text-muted-foreground">接続モード</div> : null}
+        {tool.kind === "add" ? (
+          <div className="text-xs text-muted-foreground">配置モード</div>
+        ) : null}
+        {tool.kind === "connect" ? (
+          <div className="text-xs text-muted-foreground">接続モード</div>
+        ) : null}
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <Button size="icon" variant={chatOpen ? "default" : "outline"} aria-label="チャットを開く" onClick={onToggleChat}>
+        <Button
+          size="icon"
+          variant={chatOpen ? "default" : "outline"}
+          aria-label="チャットを開く"
+          onClick={onToggleChat}
+        >
           <MessageSquareIcon className="size-4" />
         </Button>
       </div>

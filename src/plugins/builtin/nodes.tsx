@@ -416,7 +416,11 @@ function threeCanvasNodeDef(): NodeTypeDef {
             </div>
             <div className="min-h-0 flex-1">
               <React.Suspense
-                fallback={<div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">3Dビューを読み込み中...</div>}
+                fallback={
+                  <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+                    3Dビューを読み込み中...
+                  </div>
+                }
               >
                 <LazyThreeCanvasView nodeId={node.id} model={model} background={background} />
               </React.Suspense>

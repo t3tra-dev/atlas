@@ -109,9 +109,7 @@ export function DocumentEditorCanvas({
             const markerStart = edge.arrow === "both" ? "url(#arrow-start)" : undefined;
             const selected = selectedEdgeId === edgeId;
             const labelText = edge.props.label?.trim();
-            const labelPos = labelText
-              ? computeEdgeLabelPosition(edge, fromNode, toNode)
-              : null;
+            const labelPos = labelText ? computeEdgeLabelPosition(edge, fromNode, toNode) : null;
             const labelWidth = labelText
               ? Math.min(240, Math.max(44, labelText.length * 7 + 16))
               : 0;
@@ -179,8 +177,7 @@ export function DocumentEditorCanvas({
                   tool.edge.arrow === "end" || tool.edge.arrow === "both"
                     ? "url(#arrow-end)"
                     : undefined;
-                const markerStart =
-                  tool.edge.arrow === "both" ? "url(#arrow-start)" : undefined;
+                const markerStart = tool.edge.arrow === "both" ? "url(#arrow-start)" : undefined;
                 return (
                   <path
                     d={d}
@@ -212,13 +209,15 @@ export function DocumentEditorCanvas({
           return (
             <NodeView
               key={nodeId}
-              node={{
-                ...node,
-                x: screenX / camera.scale,
-                y: screenY / camera.scale,
-                w: screenW / camera.scale,
-                h: screenH / camera.scale,
-              } as DocNode}
+              node={
+                {
+                  ...node,
+                  x: screenX / camera.scale,
+                  y: screenY / camera.scale,
+                  w: screenW / camera.scale,
+                  h: screenH / camera.scale,
+                } as DocNode
+              }
               nodeDef={nodeDef}
               selected={selected}
               scale={camera.scale}

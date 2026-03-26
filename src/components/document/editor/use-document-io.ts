@@ -1,6 +1,10 @@
 import * as React from "react";
 
-import { ATLAS_FILE_EXTENSION, createAtlasBlob, decodeAtlasDocument } from "@/components/document/atlas-binary";
+import {
+  ATLAS_FILE_EXTENSION,
+  createAtlasBlob,
+  decodeAtlasDocument,
+} from "@/components/document/atlas-binary";
 import { buildMermaidElements } from "@/plugins/builtin/mermaid";
 import type { Camera, DocumentModel, Selection, Tool } from "@/components/document/model";
 import {
@@ -214,7 +218,18 @@ export function useDocumentIO({
     setSelection({ kind: "none" });
     setTool({ kind: "select" });
     setMermaidDialog(null);
-  }, [camera, cancelMermaidAnimation, doc.edges, doc.nodes, mermaidDraft, mermaidAnimationFrameRef, setDoc, setSelection, setTool, viewportSize]);
+  }, [
+    camera,
+    cancelMermaidAnimation,
+    doc.edges,
+    doc.nodes,
+    mermaidDraft,
+    mermaidAnimationFrameRef,
+    setDoc,
+    setSelection,
+    setTool,
+    viewportSize,
+  ]);
 
   return {
     atlasIOError,

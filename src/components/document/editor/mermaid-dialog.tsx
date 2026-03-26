@@ -35,9 +35,7 @@ export function MermaidImportDialog({
       <DialogContent className="sm:max-w-[720px]">
         <DialogHeader>
           <DialogTitle>Mermaid読み込み</DialogTitle>
-          <DialogDescription>
-            Mermaidコードを貼り付けてノードと関係を追加します。
-          </DialogDescription>
+          <DialogDescription>Mermaidコードを貼り付けてノードと関係を追加します。</DialogDescription>
         </DialogHeader>
 
         <InputGroup
