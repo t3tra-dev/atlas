@@ -40,7 +40,8 @@ import { useDocumentStore } from "@/components/document/store";
 import { createDefaultDocument } from "@/components/document/default-doc";
 import { BuiltinPlugin } from "@/plugins/builtin";
 import { builtinGestureRegisters } from "@/plugins/builtin/gestures";
-import { buildMermaidElements } from "@/plugins/builtin/mermaid";
+import { buildMermaidElements } from "@/plugins/builtin/mermaid/index";
+import type { MermaidBuildResult } from "@/plugins/builtin/mermaid/index";
 import { subscribeGestureFrame } from "@/components/vision/gesture-frame-bus";
 
 import type { MenuEntry } from "@/plugin";
@@ -207,6 +208,69 @@ function computeBoundsFromNodes(nodes: Record<string, DocNode>) {
     };
   }
   return bounds;
+}
+
+function translateMermaidBuildResult(
+  result: MermaidBuildResult,
+  offsetX: number,
+  offsetY: number,
+): MermaidBuildResult {
+  if (offsetX === 0 && offsetY === 0) return result;
+
+  const nodes = Object.fromEntries(
+    Object.entries(result.nodes).map(([id, node]) => [
+      id,
+      { ...node, x: node.x + offsetX, y: node.y + offsetY },
+    ]),
+  );
+
+  const animation = result.animation
+    ? {
+        ...result.animation,
+        targetPositions: Object.fromEntries(
+          Object.entries(result.animation.targetPositions).map(([id, pos]) => [
+            id,
+            { x: pos.x + offsetX, y: pos.y + offsetY },
+          ]),
+        ),
+      }
+    : undefined;
+
+  const bounds = result.bounds
+    ? {
+        minX: result.bounds.minX + offsetX,
+        minY: result.bounds.minY + offsetY,
+        maxX: result.bounds.maxX + offsetX,
+        maxY: result.bounds.maxY + offsetY,
+      }
+    : null;
+
+  return {
+    ...result,
+    nodes,
+    bounds,
+    animation,
+  };
+}
+
+function centerMermaidBuildResultOnCamera(
+  result: MermaidBuildResult,
+  camera: Camera,
+  viewportSize: { width: number; height: number },
+) {
+  const bounds = result.bounds ?? computeBoundsFromNodes(result.nodes);
+  if (!bounds) return result;
+
+  const graphCenterX = (bounds.minX + bounds.maxX) / 2;
+  const graphCenterY = (bounds.minY + bounds.maxY) / 2;
+  const cameraCenterX = camera.x + viewportSize.width / (2 * camera.scale);
+  const cameraCenterY = camera.y + viewportSize.height / (2 * camera.scale);
+
+  return translateMermaidBuildResult(
+    result,
+    cameraCenterX - graphCenterX,
+    cameraCenterY - graphCenterY,
+  );
 }
 
 function sanitizeDocumentNameForFile(title: string): string {
@@ -411,6 +475,7 @@ function ResizeHandle({
 
 export function DocumentEditor({ className }: { className?: string }) {
   const viewportRef = React.useRef<HTMLDivElement | null>(null);
+  const mermaidAnimationFrameRef = React.useRef<number | null>(null);
 
   const { activeDoc, setActiveDoc } = useDocumentStore();
   const doc = activeDoc?.doc as DocumentModel;
@@ -497,7 +562,15 @@ export function DocumentEditor({ className }: { className?: string }) {
   }>(null);
   const [mermaidDraft, setMermaidDraft] = React.useState<string>("");
 
+  const cancelMermaidAnimation = React.useCallback(() => {
+    if (mermaidAnimationFrameRef.current != null) {
+      window.cancelAnimationFrame(mermaidAnimationFrameRef.current);
+      mermaidAnimationFrameRef.current = null;
+    }
+  }, []);
+
   React.useEffect(() => {
+    cancelMermaidAnimation();
     if (cameraCommitTimerRef.current != null) {
       window.clearTimeout(cameraCommitTimerRef.current);
       cameraCommitTimerRef.current = null;
@@ -507,16 +580,17 @@ export function DocumentEditor({ className }: { className?: string }) {
     setDrag({ kind: "none" });
     setConnectPreview(null);
     setCameraState(doc.camera);
-  }, [activeDoc?.id, doc.camera, setCameraState]);
+  }, [activeDoc?.id, cancelMermaidAnimation, doc.camera, setCameraState]);
 
   React.useEffect(() => {
     return () => {
+      cancelMermaidAnimation();
       if (cameraCommitTimerRef.current != null) {
         window.clearTimeout(cameraCommitTimerRef.current);
         cameraCommitTimerRef.current = null;
       }
     };
-  }, []);
+  }, [cancelMermaidAnimation]);
 
   const viewportRect = React.useCallback(
     () => viewportRef.current?.getBoundingClientRect() ?? null,
@@ -628,11 +702,24 @@ export function DocumentEditor({ className }: { className?: string }) {
 
   const openMermaidImportDialog = React.useCallback(() => {
     const flowchartSource: string = `flowchart TD
-    A[Christmas] -->|Get money| B(Go shopping)
-    B --> C{Let me think}
-    C -->|One| D[Laptop]
-    C -->|Two| E[iPhone]
-    C -->|Three| F[fa:fa-car Car]`;
+    HQ[Headquarters] <--> Ops[Operations]
+    HQ --> Intake{Intake}
+    Intake --> API[API Gateway]
+    Intake --> Batch[Batch Jobs]
+    API --> Auth[Auth Service]
+    API --> Tasks[Task Router]
+    Tasks --> Web[Web Client]
+    Tasks --> Mobile[Mobile App]
+    Tasks --> Partner[Partner Feed]
+    Batch --> Reports[Reporting]
+    Batch --> Archive[(Archive)]
+    Reports --- Archive
+    Ops --> Monitor[Monitoring]
+    Ops --> Alerts[Alerts]
+    Monitor -.-> Tasks
+    Alerts --> Mail[Email]
+    Alerts --> Chat[ChatOps]
+    Mail --- Chat`;
     setMermaidDraft(flowchartSource.trim());
     setMermaidDialog({ error: null });
   }, []);
@@ -1203,11 +1290,14 @@ export function DocumentEditor({ className }: { className?: string }) {
       return;
     }
 
-    const result = buildMermaidElements(source, {
+    cancelMermaidAnimation();
+    const built = buildMermaidElements(source, {
       existingNodeIds: new Set(Object.keys(doc.nodes)),
       existingEdgeIds: new Set(Object.keys(doc.edges)),
       idPrefix: "mmd_",
+      animateIn: true,
     });
+    const result = centerMermaidBuildResultOnCamera(built, camera, viewportSize);
 
     if (result.nodeOrder.length === 0) {
       setMermaidDialog({ error: "ノードが見つかりませんでした" });
@@ -1220,7 +1310,17 @@ export function DocumentEditor({ className }: { className?: string }) {
       const nodeOrder = [...d.nodeOrder, ...result.nodeOrder];
       const edgeOrder = [...d.edgeOrder, ...result.edgeOrder];
 
-      const bounds = computeBoundsFromNodes(nextNodes);
+      const existingBounds = computeBoundsFromNodes(d.nodes);
+      const bounds = result.bounds
+        ? existingBounds
+          ? {
+              minX: Math.min(existingBounds.minX, result.bounds.minX),
+              minY: Math.min(existingBounds.minY, result.bounds.minY),
+              maxX: Math.max(existingBounds.maxX, result.bounds.maxX),
+              maxY: Math.max(existingBounds.maxY, result.bounds.maxY),
+            }
+          : result.bounds
+        : computeBoundsFromNodes(nextNodes);
       if (!bounds) {
         return {
           ...d,
@@ -1245,10 +1345,56 @@ export function DocumentEditor({ className }: { className?: string }) {
       };
     });
 
+    if (result.animation) {
+      const startPositions = Object.fromEntries(
+        result.nodeOrder
+          .map((nodeId) => {
+            const node = result.nodes[nodeId];
+            if (!node) return null;
+            return [nodeId, { x: node.x, y: node.y }] as const;
+          })
+          .filter((entry): entry is readonly [string, { x: number; y: number }] => entry != null),
+      );
+
+      const startedAt = performance.now();
+      const step = (now: number) => {
+        const rawProgress = (now - startedAt) / result.animation!.durationMs;
+        const progress = clamp(rawProgress, 0, 1);
+        const eased = 1 - (1 - progress) ** 3;
+
+        setDoc((prev) => {
+          let changed = false;
+          const nextNodes = { ...prev.nodes };
+          for (const nodeId of result.nodeOrder) {
+            const node = nextNodes[nodeId];
+            const start = startPositions[nodeId];
+            const target = result.animation?.targetPositions[nodeId];
+            if (!node || !start || !target) continue;
+            const x = start.x + (target.x - start.x) * eased;
+            const y = start.y + (target.y - start.y) * eased;
+            if (node.x === x && node.y === y) continue;
+            nextNodes[nodeId] = { ...node, x, y };
+            changed = true;
+          }
+
+          return changed ? { ...prev, nodes: nextNodes } : prev;
+        });
+
+        if (progress < 1) {
+          mermaidAnimationFrameRef.current = window.requestAnimationFrame(step);
+          return;
+        }
+
+        mermaidAnimationFrameRef.current = null;
+      };
+
+      mermaidAnimationFrameRef.current = window.requestAnimationFrame(step);
+    }
+
     setSelection({ kind: "none" });
     setTool({ kind: "select" });
     setMermaidDialog(null);
-  }, [doc.edges, doc.nodes, mermaidDraft, setDoc]);
+  }, [camera, cancelMermaidAnimation, doc.edges, doc.nodes, mermaidDraft, setDoc, viewportSize]);
 
   const selectedNode = selectedNodeId ? doc.nodes[selectedNodeId] : null;
   const selectedEdge = selectedEdgeId ? doc.edges[selectedEdgeId] : null;
