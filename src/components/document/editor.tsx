@@ -6,7 +6,7 @@ import { MermaidImportDialog } from "@/components/document/editor/mermaid-dialog
 import {
   DocumentEditorSidePanel,
   type EditorSidePanelMode,
-} from "@/components/document/editor/side-panel";
+} from "@/components/document/editor/side-panels";
 import {
   clamp,
   isMacPlatform,
