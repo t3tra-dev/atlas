@@ -21,7 +21,14 @@ import {
   type LLMProvider,
 } from "@/lib/llm-config";
 import { cn } from "@/lib/utils";
-import { ChevronLeftIcon, ListIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import {
+  ChevronLeftIcon,
+  ListIcon,
+  MessageSquareIcon,
+  PlusIcon,
+  Settings2Icon,
+  Trash2Icon,
+} from "lucide-react";
 import type { ChatSidePanelProps } from "./types";
 
 type ChatMessage = {
@@ -322,7 +329,7 @@ function ChatSettingsForm({
       </div>
 
       <Button className="w-full" onClick={onSave} disabled={saveDisabled}>
-        Save Settings
+        設定を保存
       </Button>
     </div>
   );
@@ -347,6 +354,7 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
   const [draft, setDraft] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
   const [activeAssistantMessageId, setActiveAssistantMessageId] = React.useState<string | null>(
     null,
   );
@@ -391,6 +399,7 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
     setSavedConfig(next);
     setDraftConfig(next);
     setError(null);
+    setIsSettingsOpen(false);
   }, [draftConfig]);
 
   const flushStreamBuffer = React.useCallback((threadId: string, assistantMessageId: string) => {
@@ -779,6 +788,18 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
                 );
               })}
             </div>
+
+            <div className="mt-3 border-t pt-3">
+              <Button
+                className="w-full"
+                variant="outline"
+                onClick={() => setIsSettingsOpen(true)}
+                disabled={isSubmitting}
+              >
+                <Settings2Icon className="size-4" />
+                設定を開く
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="flex h-full min-h-0 flex-col rounded-lg border bg-muted/20 p-3">
@@ -836,6 +857,22 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
           {error ? <div className="text-xs text-destructive">{error}</div> : null}
         </div>
       ) : null}
+
+      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>LLM 設定</DialogTitle>
+            <DialogDescription>Provider、Model、Token は Cookie に保存されます。</DialogDescription>
+          </DialogHeader>
+
+          <ChatSettingsForm
+            config={draftConfig}
+            onChange={setDraftConfig}
+            onSave={applyDraftConfig}
+            disabled={isSubmitting}
+          />
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={threadPendingDelete != null}
