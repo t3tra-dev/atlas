@@ -12,23 +12,14 @@ export default defineConfig({
     },
   },
   build: {
-    // Client-side SPA build output
     outDir: "dist",
     chunkSizeWarningLimit: 600,
     rollupOptions: {
-      // Multiple entry points: HTML for client, TS for server
       input: {
         main: path.resolve(__dirname, "index.html"),
-        server: path.resolve(__dirname, "src/server/index.ts"),
       },
-      // Separate outputs for client SPA and server
       output: {
-        entryFileNames: (chunkInfo) => {
-          if (chunkInfo.name === "server") {
-            return "server/[name].js";
-          }
-          return "assets/[name]-[hash].js";
-        },
+        entryFileNames: "assets/[name]-[hash].js",
         chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash][extname]",
         manualChunks(id) {
@@ -41,8 +32,6 @@ export default defineConfig({
           return undefined;
         },
       },
-      // Treat Hono and Node dependencies as external (don't bundle them)
-      external: ["hono", "hono/cloudflare-workers"],
     },
   },
 });

@@ -1,6 +1,104 @@
+import { GoogleGenAI } from "@google/genai";
 import { Hono } from "hono";
+import OpenAI from "openai";
 const app = new Hono();
+function isProvider(value) {
+    return value === "google" || value === "openai";
+}
+function sanitizeMessages(messages) {
+    return (messages ?? []).filter((message) => !!message &&
+        (message.role === "user" || message.role === "assistant") &&
+        typeof message.content === "string" &&
+        !!message.content.trim());
+}
+function createSseStream(streamWriter) {
+    const encoder = new TextEncoder();
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+    void (async () => {
+        const send = async (event, payload) => {
+            await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));
+        };
+        try {
+            await send("ready", {});
+            await streamWriter(send);
+            await send("done", {});
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : "LLM request failed.";
+            await send("error", { error: message });
+        }
+        finally {
+            await writer.close();
+        }
+    })();
+    return readable;
+}
+async function streamGoogleChat(model, token, messages, send) {
+    const ai = new GoogleGenAI({ apiKey: token });
+    const contents = messages.map((message) => ({
+        role: message.role === "assistant" ? "model" : "user",
+        parts: [{ text: message.content }],
+    }));
+    const response = await ai.models.generateContentStream({
+        model,
+        contents,
+    });
+    for await (const chunk of response) {
+        const delta = chunk.text;
+        if (!delta)
+            continue;
+        await send("delta", { delta });
+    }
+}
+async function streamOpenAiChat(model, token, messages, send) {
+    const client = new OpenAI({ apiKey: token });
+    const completion = await client.responses.create({
+        model,
+        stream: true,
+        input: messages.map((message) => ({
+            type: "message",
+            role: message.role,
+            content: message.content,
+        })),
+    });
+    for await (const chunk of completion) {
+        if (chunk.type !== "response.output_text.delta")
+            continue;
+        const delta = chunk.delta;
+        if (!delta)
+            continue;
+        await send("delta", { delta });
+    }
+}
 app.get("/api/health", (c) => c.json({ ok: true }));
+app.post("/api/llm/chat", async (c) => {
+    const body = (await c.req.json().catch(() => null));
+    if (!body || !isProvider(body.provider)) {
+        return c.json({ error: "Unsupported LLM provider." }, 400);
+    }
+    const model = body.model?.trim();
+    const token = body.token?.trim();
+    const messages = sanitizeMessages(body.messages);
+    if (!model || !token || !messages.length) {
+        return c.json({ error: "Provider, model, token, and messages are required." }, 400);
+    }
+    const stream = createSseStream(async (send) => {
+        if (body.provider === "google") {
+            await streamGoogleChat(model, token, messages, send);
+            return;
+        }
+        await streamOpenAiChat(model, token, messages, send);
+    });
+    return new Response(stream, {
+        headers: {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    });
+});
 // Handle SPA fallback
 app.get("*", async (c) => {
     const url = new URL(c.req.url);

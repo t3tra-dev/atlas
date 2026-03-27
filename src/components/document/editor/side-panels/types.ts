@@ -20,4 +20,5 @@ export type EdgeSidePanelProps = {
 
 export type ChatSidePanelProps = {
   selectedNode: DocNode | null;
+  isActive: boolean;
 };

@@ -34,7 +34,9 @@ export function DocumentEditorSidePanel({
         visible ? "opacity-100" : "pointer-events-none opacity-0",
       )}
     >
-      {mode === "chat" ? <ChatSidePanel selectedNode={selectedNode} /> : null}
+      <div className={mode === "chat" ? "h-full" : "hidden"}>
+        <ChatSidePanel selectedNode={selectedNode} isActive={mode === "chat"} />
+      </div>
 
       {mode === "node" && selectedNode ? (
         <NodeSidePanel
