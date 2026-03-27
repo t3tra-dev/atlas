@@ -2,6 +2,11 @@ import { ATLAS_FILE_EXTENSION, ATLAS_MIME_TYPE } from "@/components/document/atl
 import type { Camera, DocEdge, DocNode, EdgeShape } from "@/components/document/model";
 import { createHashId, createUniqueHashId } from "@/lib/hash-id";
 import type { MermaidBuildResult } from "@/plugins/builtin/mermaid";
+export {
+  collectNodeStartPositions,
+  mergeMermaidBuildResultIntoDocument,
+  runNodeAnimation,
+} from "./document-editing";
 
 export function isTextInputTarget(target: EventTarget | null) {
   const el = target as HTMLElement | null;

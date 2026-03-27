@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { DocEdge, DocNode, DocumentModel } from "@/components/document/model";
+import type { DocEdge, DocNode, DocumentModel, Selection } from "@/components/document/model";
 import type { NodeRegistry } from "@/components/document/plugin-system";
 import { ChatSidePanel } from "./chat";
 import { EdgeSidePanel } from "./edge";
@@ -17,6 +17,7 @@ export function DocumentEditorSidePanel({
   selectedEdge,
   nodeRegistry,
   setDoc,
+  setSelection,
   onDeleteSelected,
   atlasIOError,
   onElementReferenceActivate,
@@ -29,6 +30,7 @@ export function DocumentEditorSidePanel({
   selectedEdge: DocEdge | null;
   nodeRegistry: NodeRegistry;
   setDoc: SetDocument;
+  setSelection: React.Dispatch<React.SetStateAction<Selection>>;
   onDeleteSelected: () => void;
   atlasIOError: string | null;
   onElementReferenceActivate?: (elementId: string) => void;
@@ -48,6 +50,8 @@ export function DocumentEditorSidePanel({
           selectedNode={selectedNode}
           selectedEdge={selectedEdge}
           isActive={mode === "chat"}
+          setDoc={setDoc}
+          setSelection={setSelection}
           onElementReferenceActivate={onElementReferenceActivate}
         />
       </div>

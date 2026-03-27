@@ -1,4 +1,4 @@
-import type { DocEdge, DocNode, DocumentModel } from "@/components/document/model";
+import type { DocEdge, DocNode, DocumentModel, Selection } from "@/components/document/model";
 import type { NodeRegistry } from "@/components/document/plugin-system";
 
 export type EditorSidePanelMode = "none" | "node" | "edge" | "chat";
@@ -24,5 +24,7 @@ export type ChatSidePanelProps = {
   selectedNode: DocNode | null;
   selectedEdge: DocEdge | null;
   isActive: boolean;
+  setDoc: SetDocument;
+  setSelection: React.Dispatch<React.SetStateAction<Selection>>;
   onElementReferenceActivate?: (elementId: string) => void;
 };

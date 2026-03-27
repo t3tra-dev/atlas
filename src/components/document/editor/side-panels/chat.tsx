@@ -27,6 +27,18 @@ import { runLLMSession, type LocalLLMTool } from "@/lib/llm-session";
 import { cn } from "@/lib/utils";
 import type { LLMMessage, LLMToolCall } from "@/shared/llm";
 import {
+  cancelNodeAnimation,
+  collectNodeStartPositions,
+  createDerivedNodesFromSource,
+  createPositionedShapeNodes,
+  deleteNodesById,
+  runNodeAnimation,
+  type DerivedShapeNodeInput,
+  type PositionedShapeNodeInput,
+  type SupportedShape,
+} from "@/components/document/editor/document-editing";
+import type { MermaidDirection } from "@/plugins/builtin/mermaid/types";
+import {
   BotIcon,
   ChevronLeftIcon,
   ListIcon,
@@ -115,15 +127,39 @@ type EditableLLMConfig = {
 
 type ChatPanelView = "conversation" | "threads";
 
-const CHAT_HISTORY_STORAGE_KEY = "atlas.chat.history";
+const CHAT_HISTORY_STORAGE_KEY_PREFIX = "atlas.chat.history";
 const EMPTY_THREAD_TITLE = "新規スレッド";
 const SAFE_MARKDOWN_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:", "atlas-ref:"]);
 const ELEMENT_REFERENCE_PATTERN = /elm\[((?:node|edge)_[a-zA-Z0-9_-]+)\]/g;
+const DOCUMENT_SHAPES = [
+  "rect",
+  "stadium",
+  "subroutine",
+  "cylinder",
+  "circle",
+  "doublecircle",
+  "diamond",
+  "hexagon",
+  "parallelogram",
+  "trapezoid",
+  "invtrapezoid",
+] as const satisfies ReadonlyArray<SupportedShape>;
+const MERMAID_DIRECTIONS = [
+  "TB",
+  "TD",
+  "LR",
+  "RL",
+  "BT",
+] as const satisfies ReadonlyArray<MermaidDirection>;
 
 const ATLAS_CHAT_SYSTEM_PROMPT = [
   "You are Atlas, an assistant embedded in a visual document editor.",
   "Help the user understand and work with the currently open Atlas document.",
   "When the user asks about the current document, canvas, nodes, edges, layout, positions, relationships, camera, zoom, or selection, call get_current_document_state before answering.",
+  "When the user asks to edit the current document by creating, deriving, or deleting nodes, use the document editing tools instead of only describing the change.",
+  "For direct node creation, use create_document_nodes and provide top-left world coordinates, shape, and text for each node.",
+  "For derived node expansion from an existing node id, use derive_document_nodes_from_node so Atlas can place and animate the new nodes with its Mermaid layout engine.",
+  "For deletion, use delete_document_nodes with one or more node ids.",
   "Base statements about the current document only on tool results.",
   "The tool returns each node's coordinates, size, center point, payload, and incoming/outgoing relations, plus camera position and zoom.",
   "When mentioning a specific node, write its canonical reference exactly as elm[node_xxxxxxxx] using the real node id from tool output.",
@@ -142,6 +178,107 @@ function createMessageId() {
 
 function createThreadId() {
   return `thread-${createMessageId()}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isSupportedShape(value: unknown): value is SupportedShape {
+  return typeof value === "string" && DOCUMENT_SHAPES.includes(value as SupportedShape);
+}
+
+function isMermaidDirection(value: unknown): value is MermaidDirection {
+  return typeof value === "string" && MERMAID_DIRECTIONS.includes(value as MermaidDirection);
+}
+
+function parsePositionedNodeInputs(args: unknown): PositionedShapeNodeInput[] {
+  if (!isRecord(args) || !Array.isArray(args.nodes) || args.nodes.length === 0) {
+    throw new Error("'nodes' must be a non-empty array.");
+  }
+
+  return args.nodes.map((node, index) => {
+    if (!isRecord(node)) {
+      throw new Error(`nodes[${index}] must be an object.`);
+    }
+
+    const { x, y, shape, text } = node;
+    if (typeof x !== "number" || !Number.isFinite(x)) {
+      throw new Error(`nodes[${index}].x must be a finite number.`);
+    }
+    if (typeof y !== "number" || !Number.isFinite(y)) {
+      throw new Error(`nodes[${index}].y must be a finite number.`);
+    }
+    if (!isSupportedShape(shape)) {
+      throw new Error(`nodes[${index}].shape must be one of ${DOCUMENT_SHAPES.join(", ")}.`);
+    }
+    if (typeof text !== "string" || !text.trim()) {
+      throw new Error(`nodes[${index}].text must be a non-empty string.`);
+    }
+
+    return {
+      x,
+      y,
+      shape,
+      text: text.trim(),
+    };
+  });
+}
+
+function parseDerivedNodeArgs(args: unknown): {
+  sourceNodeId: string;
+  nodes: DerivedShapeNodeInput[];
+  direction?: MermaidDirection;
+} {
+  if (!isRecord(args)) {
+    throw new Error("Arguments must be an object.");
+  }
+  if (typeof args.sourceNodeId !== "string" || !args.sourceNodeId.trim()) {
+    throw new Error("'sourceNodeId' must be a non-empty string.");
+  }
+  if (!Array.isArray(args.nodes) || args.nodes.length === 0) {
+    throw new Error("'nodes' must be a non-empty array.");
+  }
+
+  return {
+    sourceNodeId: args.sourceNodeId.trim(),
+    direction: isMermaidDirection(args.direction) ? args.direction : undefined,
+    nodes: args.nodes.map((node, index) => {
+      if (!isRecord(node)) {
+        throw new Error(`nodes[${index}] must be an object.`);
+      }
+      if (!isSupportedShape(node.shape)) {
+        throw new Error(`nodes[${index}].shape must be one of ${DOCUMENT_SHAPES.join(", ")}.`);
+      }
+      if (typeof node.text !== "string" || !node.text.trim()) {
+        throw new Error(`nodes[${index}].text must be a non-empty string.`);
+      }
+
+      return {
+        shape: node.shape,
+        text: node.text.trim(),
+        edgeLabel:
+          typeof node.edgeLabel === "string" && node.edgeLabel.trim()
+            ? node.edgeLabel.trim()
+            : undefined,
+      };
+    }),
+  };
+}
+
+function parseDeleteNodeIds(args: unknown): string[] {
+  if (!isRecord(args) || !Array.isArray(args.nodeIds) || args.nodeIds.length === 0) {
+    throw new Error("'nodeIds' must be a non-empty array.");
+  }
+
+  const nodeIds = args.nodeIds.map((nodeId, index) => {
+    if (typeof nodeId !== "string" || !nodeId.trim()) {
+      throw new Error(`nodeIds[${index}] must be a non-empty string.`);
+    }
+    return nodeId.trim();
+  });
+
+  return Array.from(new Set(nodeIds));
 }
 
 function sanitizeToolCalls(value: unknown): Array<LLMToolCall> {
@@ -703,17 +840,25 @@ function normalizeChatHistory(value: unknown): ChatHistoryState {
   };
 }
 
-function loadStoredChatHistory() {
+function getChatHistoryStorageKey(activeDocId?: string) {
+  return `${CHAT_HISTORY_STORAGE_KEY_PREFIX}.${activeDocId?.trim() || "default"}`;
+}
+
+function normalizeChatHistoryDocId(activeDocId?: string) {
+  return activeDocId?.trim() || "default";
+}
+
+function loadStoredChatHistory(activeDocId?: string) {
   if (typeof window === "undefined") {
     return normalizeChatHistory(null);
   }
 
   try {
-    const raw = window.localStorage.getItem(CHAT_HISTORY_STORAGE_KEY);
+    const raw = window.localStorage.getItem(getChatHistoryStorageKey(activeDocId));
     if (!raw) return normalizeChatHistory(null);
     return normalizeChatHistory(JSON.parse(raw) as unknown);
   } catch {
-    window.localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
+    window.localStorage.removeItem(getChatHistoryStorageKey(activeDocId));
     return normalizeChatHistory(null);
   }
 }
@@ -940,31 +1085,61 @@ export function ChatSidePanel({
   selectedNode,
   selectedEdge,
   isActive,
+  setDoc,
+  setSelection,
   onElementReferenceActivate,
 }: ChatSidePanelProps) {
   const conversationRef = React.useRef<HTMLDivElement | null>(null);
+  const toolAnimationFrameRef = React.useRef<number | null>(null);
+  const docRef = React.useRef(doc);
+  const selectedNodeIdRef = React.useRef<string | null>(selectedNode?.id ?? null);
+  const selectedEdgeIdRef = React.useRef<string | null>(selectedEdge?.id ?? null);
   const wasActiveRef = React.useRef(isActive);
   const [savedConfig, setSavedConfig] = React.useState(() => loadSavedLLMConfig());
   const [draftConfig, setDraftConfig] = React.useState<EditableLLMConfig>(() =>
     createEditableLLMConfig(loadSavedLLMConfig()),
   );
-  const [chatHistory, setChatHistory] = React.useState<ChatHistoryState>(() =>
-    loadStoredChatHistory(),
+  const normalizedActiveDocId = React.useMemo(
+    () => normalizeChatHistoryDocId(activeDocId),
+    [activeDocId],
   );
+  const [chatHistory, setChatHistory] = React.useState<ChatHistoryState>(() =>
+    loadStoredChatHistory(activeDocId),
+  );
+  const [chatHistoryDocId, setChatHistoryDocId] = React.useState(normalizedActiveDocId);
   const [panelView, setPanelView] = React.useState<ChatPanelView>("threads");
   const [draft, setDraft] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
   const [threadPendingDelete, setThreadPendingDelete] = React.useState<ChatThread | null>(null);
+  const visibleChatHistory =
+    chatHistoryDocId === normalizedActiveDocId ? chatHistory : normalizeChatHistory(null);
   const activeThread = React.useMemo(
     () =>
-      chatHistory.threads.find((thread) => thread.id === chatHistory.activeThreadId) ??
-      chatHistory.threads[0],
-    [chatHistory],
+      visibleChatHistory.threads.find(
+        (thread) => thread.id === visibleChatHistory.activeThreadId,
+      ) ?? visibleChatHistory.threads[0],
+    [visibleChatHistory],
   );
   const messages = React.useMemo(() => activeThread?.messages ?? [], [activeThread]);
   const displayItems = React.useMemo(() => groupMessagesForDisplay(messages), [messages]);
+
+  React.useEffect(() => {
+    docRef.current = doc;
+  }, [doc]);
+
+  React.useEffect(() => {
+    selectedNodeIdRef.current = selectedNode?.id ?? null;
+    selectedEdgeIdRef.current = selectedEdge?.id ?? null;
+  }, [selectedEdge?.id, selectedNode?.id]);
+
+  React.useEffect(() => {
+    return () => {
+      cancelNodeAnimation(toolAnimationFrameRef);
+    };
+  }, []);
+
   const llmTools = React.useMemo<Array<LocalLLMTool>>(
     () => [
       {
@@ -979,23 +1154,194 @@ export function ChatSidePanel({
         execute: async () =>
           JSON.stringify(
             buildDocumentSnapshot({
-              doc,
+              doc: docRef.current,
               activeDocId,
-              selectedNodeId: selectedNode?.id ?? null,
-              selectedEdgeId: selectedEdge?.id ?? null,
+              selectedNodeId: selectedNodeIdRef.current,
+              selectedEdgeId: selectedEdgeIdRef.current,
             }),
             null,
             2,
           ),
       },
+      {
+        name: "create_document_nodes",
+        description:
+          "Create one or more shape nodes from explicit top-left world coordinates, shape, and text. Use this for direct placement without layout animation.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodes: {
+              type: "array",
+              minItems: 1,
+              items: {
+                type: "object",
+                properties: {
+                  x: { type: "number" },
+                  y: { type: "number" },
+                  shape: { type: "string", enum: [...DOCUMENT_SHAPES] },
+                  text: { type: "string" },
+                },
+                required: ["x", "y", "shape", "text"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["nodes"],
+          additionalProperties: false,
+        },
+        execute: async (args) => {
+          const nodes = parsePositionedNodeInputs(args);
+          const result = createPositionedShapeNodes(docRef.current, nodes);
+          docRef.current = result.nextDoc;
+          setDoc(result.nextDoc);
+          setSelection({ kind: "none" });
+
+          return JSON.stringify(
+            {
+              ok: true,
+              createdNodeIds: result.createdNodeIds,
+              createdNodes: result.createdNodeIds.map((nodeId) => {
+                const node = result.createdNodes[nodeId];
+                return {
+                  id: node.id,
+                  x: node.x,
+                  y: node.y,
+                  w: node.w,
+                  h: node.h,
+                  shape: node.props.shape,
+                  text: node.props.text,
+                };
+              }),
+            },
+            null,
+            2,
+          );
+        },
+      },
+      {
+        name: "derive_document_nodes_from_node",
+        description:
+          "Create one or more new child nodes from an existing source node id. Atlas will place and animate them using its Mermaid flowchart layout engine, so coordinates must not be provided.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sourceNodeId: { type: "string" },
+            direction: { type: "string", enum: [...MERMAID_DIRECTIONS] },
+            nodes: {
+              type: "array",
+              minItems: 1,
+              items: {
+                type: "object",
+                properties: {
+                  shape: { type: "string", enum: [...DOCUMENT_SHAPES] },
+                  text: { type: "string" },
+                  edgeLabel: { type: "string" },
+                },
+                required: ["shape", "text"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["sourceNodeId", "nodes"],
+          additionalProperties: false,
+        },
+        execute: async (args) => {
+          const parsed = parseDerivedNodeArgs(args);
+          const result = createDerivedNodesFromSource({
+            doc: docRef.current,
+            sourceNodeId: parsed.sourceNodeId,
+            nodes: parsed.nodes,
+            direction: parsed.direction,
+          });
+
+          docRef.current = result.nextDoc;
+          setDoc(result.nextDoc);
+          setSelection({ kind: "none" });
+          runNodeAnimation({
+            frameRef: toolAnimationFrameRef,
+            setDoc,
+            startPositions: collectNodeStartPositions(result.createdNodes, result.createdNodeIds),
+            animation: result.animation,
+          });
+
+          return JSON.stringify(
+            {
+              ok: true,
+              engine: result.engine,
+              sourceNodeId: parsed.sourceNodeId,
+              createdNodeIds: result.createdNodeIds,
+              createdEdgeIds: result.createdEdgeIds,
+              createdNodes: result.createdNodeIds.map((nodeId) => {
+                const node = result.createdNodes[nodeId];
+                return {
+                  id: node.id,
+                  shape: node.props.shape,
+                  text: node.props.text,
+                  targetX: result.animation.targetPositions[nodeId]?.x ?? node.x,
+                  targetY: result.animation.targetPositions[nodeId]?.y ?? node.y,
+                };
+              }),
+            },
+            null,
+            2,
+          );
+        },
+      },
+      {
+        name: "delete_document_nodes",
+        description:
+          "Delete one or more nodes by id. Connected edges are removed automatically. Accepts arrays of any length including one.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeIds: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string" },
+            },
+          },
+          required: ["nodeIds"],
+          additionalProperties: false,
+        },
+        execute: async (args) => {
+          const nodeIds = parseDeleteNodeIds(args);
+          const result = deleteNodesById(docRef.current, nodeIds);
+          docRef.current = result.nextDoc;
+          setDoc(result.nextDoc);
+          setSelection({ kind: "none" });
+
+          return JSON.stringify(
+            {
+              ok: true,
+              removedNodeIds: result.removedNodeIds,
+              removedEdgeIds: result.removedEdgeIds,
+              missingNodeIds: result.missingNodeIds,
+            },
+            null,
+            2,
+          );
+        },
+      },
     ],
-    [activeDocId, doc, selectedEdge?.id, selectedNode?.id],
+    [activeDocId, setDoc, setSelection],
   );
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(CHAT_HISTORY_STORAGE_KEY, JSON.stringify(chatHistory));
-  }, [chatHistory]);
+    window.localStorage.setItem(
+      getChatHistoryStorageKey(chatHistoryDocId),
+      JSON.stringify(chatHistory),
+    );
+  }, [chatHistory, chatHistoryDocId]);
+
+  React.useEffect(() => {
+    setChatHistory(loadStoredChatHistory(activeDocId));
+    setChatHistoryDocId(normalizedActiveDocId);
+    setPanelView("threads");
+    setDraft("");
+    setError(null);
+    setThreadPendingDelete(null);
+  }, [activeDocId, normalizedActiveDocId]);
 
   React.useEffect(() => {
     const viewport = conversationRef.current;
@@ -1059,10 +1405,10 @@ export function ChatSidePanel({
     (threadId: string) => {
       if (isSubmitting) return;
 
-      const thread = chatHistory.threads.find((entry) => entry.id === threadId) ?? null;
+      const thread = visibleChatHistory.threads.find((entry) => entry.id === threadId) ?? null;
       setThreadPendingDelete(thread);
     },
-    [chatHistory.threads, isSubmitting],
+    [isSubmitting, visibleChatHistory.threads],
   );
 
   const confirmDeleteThread = React.useCallback(
@@ -1277,7 +1623,7 @@ export function ChatSidePanel({
             </div>
 
             <div className="flex-1 space-y-2 overflow-y-auto">
-              {chatHistory.threads.map((thread) => {
+              {visibleChatHistory.threads.map((thread) => {
                 const isActive = thread.id === activeThread?.id;
 
                 return (

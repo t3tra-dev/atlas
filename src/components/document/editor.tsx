@@ -561,6 +561,7 @@ export function DocumentEditor({ className }: { className?: string }) {
           selectedEdge={selectedEdge}
           nodeRegistry={nodeRegistry}
           setDoc={setDoc}
+          setSelection={setSelection}
           onDeleteSelected={deleteSelected}
           atlasIOError={atlasIOError}
           onElementReferenceActivate={focusElementReference}

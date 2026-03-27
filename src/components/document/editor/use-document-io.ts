@@ -8,8 +8,9 @@ import {
 import { buildMermaidElements } from "@/plugins/builtin/mermaid";
 import type { Camera, DocumentModel, Selection, Tool } from "@/components/document/model";
 import {
-  clamp,
-  computeBoundsFromNodes,
+  collectNodeStartPositions,
+  mergeMermaidBuildResultIntoDocument,
+  runNodeAnimation,
   downloadBlob,
   pickAtlasFile,
   sanitizeDocumentNameForFile,
@@ -128,91 +129,15 @@ export function useDocumentIO({
       return;
     }
 
-    setDoc((d) => {
-      const nextNodes = { ...d.nodes, ...result.nodes };
-      const nextEdges = { ...d.edges, ...result.edges };
-      const nodeOrder = [...d.nodeOrder, ...result.nodeOrder];
-      const edgeOrder = [...d.edgeOrder, ...result.edgeOrder];
-
-      const existingBounds = computeBoundsFromNodes(d.nodes);
-      const bounds = result.bounds
-        ? existingBounds
-          ? {
-              minX: Math.min(existingBounds.minX, result.bounds.minX),
-              minY: Math.min(existingBounds.minY, result.bounds.minY),
-              maxX: Math.max(existingBounds.maxX, result.bounds.maxX),
-              maxY: Math.max(existingBounds.maxY, result.bounds.maxY),
-            }
-          : result.bounds
-        : computeBoundsFromNodes(nextNodes);
-      if (!bounds) {
-        return {
-          ...d,
-          nodes: nextNodes,
-          nodeOrder,
-          edges: nextEdges,
-          edgeOrder,
-        };
-      }
-
-      const padding = 200;
-      const nextWidth = Math.max(d.canvas.width, bounds.maxX - bounds.minX + padding * 2);
-      const nextHeight = Math.max(d.canvas.height, bounds.maxY - bounds.minY + padding * 2);
-
-      return {
-        ...d,
-        nodes: nextNodes,
-        nodeOrder,
-        edges: nextEdges,
-        edgeOrder,
-        canvas: { ...d.canvas, width: nextWidth, height: nextHeight },
-      };
-    });
+    setDoc((d) => mergeMermaidBuildResultIntoDocument(d, result));
 
     if (result.animation) {
-      const startPositions = Object.fromEntries(
-        result.nodeOrder
-          .map((nodeId) => {
-            const node = result.nodes[nodeId];
-            if (!node) return null;
-            return [nodeId, { x: node.x, y: node.y }] as const;
-          })
-          .filter((entry): entry is readonly [string, { x: number; y: number }] => entry != null),
-      );
-
-      const startedAt = performance.now();
-      const step = (now: number) => {
-        const rawProgress = (now - startedAt) / result.animation!.durationMs;
-        const progress = clamp(rawProgress, 0, 1);
-        const eased = 1 - (1 - progress) ** 3;
-
-        setDoc((prev) => {
-          let changed = false;
-          const nextNodes = { ...prev.nodes };
-          for (const nodeId of result.nodeOrder) {
-            const node = nextNodes[nodeId];
-            const start = startPositions[nodeId];
-            const target = result.animation?.targetPositions[nodeId];
-            if (!node || !start || !target) continue;
-            const x = start.x + (target.x - start.x) * eased;
-            const y = start.y + (target.y - start.y) * eased;
-            if (node.x === x && node.y === y) continue;
-            nextNodes[nodeId] = { ...node, x, y };
-            changed = true;
-          }
-
-          return changed ? { ...prev, nodes: nextNodes } : prev;
-        });
-
-        if (progress < 1) {
-          mermaidAnimationFrameRef.current = window.requestAnimationFrame(step);
-          return;
-        }
-
-        mermaidAnimationFrameRef.current = null;
-      };
-
-      mermaidAnimationFrameRef.current = window.requestAnimationFrame(step);
+      runNodeAnimation({
+        frameRef: mermaidAnimationFrameRef,
+        setDoc,
+        startPositions: collectNodeStartPositions(result.nodes, result.nodeOrder),
+        animation: result.animation,
+      });
     }
 
     setSelection({ kind: "none" });
@@ -224,7 +149,6 @@ export function useDocumentIO({
     doc.edges,
     doc.nodes,
     mermaidDraft,
-    mermaidAnimationFrameRef,
     setDoc,
     setSelection,
     setTool,
