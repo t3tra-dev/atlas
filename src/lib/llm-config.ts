@@ -240,7 +240,7 @@ export function setCookie(name: string, value: string, maxAge = LLM_CONFIG_COOKI
   document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; samesite=lax`;
 }
 
-export function loadSavedLlmConfig(): SavedLLMConfig {
+export function loadSavedLLMConfig(): SavedLLMConfig {
   const rawProvider = getCookie(LLM_CONFIG_COOKIE_NAMES.provider);
   const provider = isLLMProvider(rawProvider) ? rawProvider : "";
 
@@ -251,13 +251,13 @@ export function loadSavedLlmConfig(): SavedLLMConfig {
   };
 }
 
-export function saveLlmConfig(config: { provider: LLMProvider; model: string; token: string }) {
+export function saveLLMConfig(config: { provider: LLMProvider; model: string; token: string }) {
   setCookie(LLM_CONFIG_COOKIE_NAMES.provider, config.provider);
   setCookie(LLM_CONFIG_COOKIE_NAMES.model, config.model);
   setCookie(LLM_CONFIG_COOKIE_NAMES.token, config.token);
 }
 
-export function hasCompleteLlmConfig(config: SavedLLMConfig): config is {
+export function hasCompleteLLMConfig(config: SavedLLMConfig): config is {
   provider: LLMProvider;
   model: string;
   token: string;
@@ -265,7 +265,7 @@ export function hasCompleteLlmConfig(config: SavedLLMConfig): config is {
   return isLLMProvider(config.provider) && !!config.model.trim() && !!config.token.trim();
 }
 
-export function createEditableLlmConfig(config: SavedLLMConfig) {
+export function createEditableLLMConfig(config: SavedLLMConfig) {
   const provider = config.provider || "google";
   const providerModels = LLM_MODELS_BY_PROVIDER[provider];
   const model =

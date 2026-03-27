@@ -12,12 +12,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  createEditableLlmConfig,
-  hasCompleteLlmConfig,
+  createEditableLLMConfig,
+  hasCompleteLLMConfig,
   LLM_DEFAULT_MODELS,
   LLM_MODELS_BY_PROVIDER,
-  loadSavedLlmConfig,
-  saveLlmConfig,
+  loadSavedLLMConfig,
+  saveLLMConfig,
   type LLMProvider,
 } from "@/lib/llm-config";
 import { cn } from "@/lib/utils";
@@ -51,7 +51,7 @@ type ChatHistoryState = {
   threads: Array<ChatThread>;
 };
 
-type EditableLlmConfig = {
+type EditableLLMConfig = {
   provider: LLMProvider;
   model: string;
   token: string;
@@ -268,9 +268,9 @@ function ChatSettingsForm({
   onChange,
   onSave,
 }: {
-  config: EditableLlmConfig;
+  config: EditableLLMConfig;
   disabled?: boolean;
-  onChange: (next: EditableLlmConfig) => void;
+  onChange: (next: EditableLLMConfig) => void;
   onSave: () => void;
 }) {
   const modelOptions = LLM_MODELS_BY_PROVIDER[config.provider];
@@ -343,9 +343,9 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
   const streamFrameRef = React.useRef<number | null>(null);
   const activeAssistantMessageIdRef = React.useRef<string | null>(null);
   const activeAssistantThreadIdRef = React.useRef<string | null>(null);
-  const [savedConfig, setSavedConfig] = React.useState(() => loadSavedLlmConfig());
-  const [draftConfig, setDraftConfig] = React.useState<EditableLlmConfig>(() =>
-    createEditableLlmConfig(loadSavedLlmConfig()),
+  const [savedConfig, setSavedConfig] = React.useState(() => loadSavedLLMConfig());
+  const [draftConfig, setDraftConfig] = React.useState<EditableLLMConfig>(() =>
+    createEditableLLMConfig(loadSavedLLMConfig()),
   );
   const [chatHistory, setChatHistory] = React.useState<ChatHistoryState>(() =>
     loadStoredChatHistory(),
@@ -386,7 +386,7 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
     wasActiveRef.current = isActive;
   }, [isActive]);
 
-  const hasConfig = hasCompleteLlmConfig(savedConfig);
+  const hasConfig = hasCompleteLLMConfig(savedConfig);
 
   const applyDraftConfig = React.useCallback(() => {
     const next = {
@@ -395,7 +395,7 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
       token: draftConfig.token.trim(),
     };
 
-    saveLlmConfig(next);
+    saveLLMConfig(next);
     setSavedConfig(next);
     setDraftConfig(next);
     setError(null);
@@ -508,7 +508,7 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
   );
 
   const sendMessage = React.useCallback(async () => {
-    if (!hasCompleteLlmConfig(savedConfig)) {
+    if (!hasCompleteLLMConfig(savedConfig)) {
       setError("設定を保存してください。");
       return;
     }
