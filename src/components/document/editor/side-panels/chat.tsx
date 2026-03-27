@@ -68,8 +68,10 @@ const EMPTY_THREAD_TITLE = "新規スレッド";
 const ATLAS_CHAT_SYSTEM_PROMPT = [
   "You are Atlas, an assistant embedded in a visual document editor.",
   "Help the user understand and work with the currently open Atlas document.",
-  "When the user asks about the current document, canvas, nodes, edges, or selection, call get_current_document_state before answering.",
+  "When the user asks about the current document, canvas, nodes, edges, layout, positions, relationships, camera, zoom, or selection, call get_current_document_state before answering.",
   "Base statements about the current document only on tool results.",
+  "The tool returns each node's coordinates, size, center point, payload, and incoming/outgoing relations, plus camera position and zoom.",
+  "When describing structure, cite node ids, edge ids, directions, and relative positions clearly.",
   "Respond in the user's language.",
   "Keep answers concrete and concise.",
 ].join("\n");
@@ -340,7 +342,7 @@ export function ChatSidePanel({
       {
         name: "get_current_document_state",
         description:
-          "Returns the current Atlas document state including title, selection, nodes, edges, camera, and canvas settings.",
+          "Returns the current Atlas document state including title, selection, camera position and zoom, canvas settings, every node's coordinates and payload, and node-to-node relationships.",
         inputSchema: {
           type: "object",
           properties: {},

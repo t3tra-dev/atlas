@@ -32,7 +32,9 @@ function sanitizeLLMMessages(messages) {
             continue;
         }
         if (message.role === "assistant") {
-            if (hasToolCalls(message) && Array.isArray(message.toolCalls) && message.toolCalls.length > 0) {
+            if (hasToolCalls(message) &&
+                Array.isArray(message.toolCalls) &&
+                message.toolCalls.length > 0) {
                 const toolCalls = message.toolCalls
                     .filter((toolCall) => isRecord(toolCall) &&
                     typeof toolCall.id === "string" &&
