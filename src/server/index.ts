@@ -1,6 +1,15 @@
 import { GoogleGenAI } from "@google/genai";
 import { Hono } from "hono";
 import OpenAI from "openai";
+import type {
+  LLMAssistantTextMessage,
+  LLMMessage,
+  LLMProvider,
+  LLMToolCall,
+  LLMToolDefinition,
+  LLMTurnRequest,
+  LLMTurnResponse,
+} from "../shared/llm.js";
 
 type Env = {
   ASSETS: {
@@ -8,15 +17,13 @@ type Env = {
   };
 };
 
-type LlmProvider = "google" | "openai";
-
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
 };
 
 type ChatRequestBody = {
-  provider?: LlmProvider;
+  provider?: LLMProvider;
   model?: string;
   token?: string;
   messages?: Array<ChatMessage>;
@@ -24,8 +31,18 @@ type ChatRequestBody = {
 
 const app = new Hono<{ Bindings: Env }>();
 
-function isProvider(value: string | undefined): value is LlmProvider {
+function isProvider(value: string | undefined): value is LLMProvider {
   return value === "google" || value === "openai";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasToolCalls(
+  message: LLMMessage,
+): message is Extract<LLMMessage, { role: "assistant"; toolCalls: Array<LLMToolCall> }> {
+  return message.role === "assistant" && "toolCalls" in message;
 }
 
 function sanitizeMessages(messages: ChatRequestBody["messages"]) {
@@ -36,6 +53,381 @@ function sanitizeMessages(messages: ChatRequestBody["messages"]) {
       typeof message.content === "string" &&
       !!message.content.trim(),
   );
+}
+
+function sanitizeLlmMessages(messages: LLMTurnRequest["messages"]): Array<LLMMessage> {
+  const sanitized: Array<LLMMessage> = [];
+
+  for (const message of messages ?? []) {
+    if (!isRecord(message) || typeof message.role !== "string") continue;
+
+    if (
+      (message.role === "system" || message.role === "user") &&
+      typeof message.content === "string" &&
+      message.content.trim()
+    ) {
+      sanitized.push({
+        role: message.role,
+        content: message.content,
+      });
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      if (
+        hasToolCalls(message) &&
+        Array.isArray(message.toolCalls) &&
+        message.toolCalls.length > 0
+      ) {
+        const toolCalls = message.toolCalls
+          .filter(
+            (toolCall: LLMToolCall): toolCall is LLMToolCall =>
+              isRecord(toolCall) &&
+              typeof toolCall.id === "string" &&
+              typeof toolCall.name === "string" &&
+              typeof toolCall.arguments === "string" &&
+              !!toolCall.name.trim(),
+          )
+          .map((toolCall: LLMToolCall) => ({
+            id: toolCall.id,
+            name: toolCall.name,
+            arguments: toolCall.arguments,
+          }));
+
+        if (toolCalls.length > 0) {
+          sanitized.push({
+            role: "assistant",
+            content: typeof message.content === "string" ? message.content : "",
+            toolCalls,
+          });
+          continue;
+        }
+      }
+
+      if (typeof message.content === "string" && message.content.trim()) {
+        sanitized.push({
+          role: "assistant",
+          content: message.content,
+        });
+      }
+      continue;
+    }
+
+    if (
+      message.role === "tool" &&
+      typeof message.toolCallId === "string" &&
+      typeof message.name === "string" &&
+      typeof message.content === "string"
+    ) {
+      sanitized.push({
+        role: "tool",
+        toolCallId: message.toolCallId,
+        name: message.name,
+        content: message.content,
+      });
+    }
+  }
+
+  return sanitized;
+}
+
+function sanitizeLlmTools(tools: LLMTurnRequest["tools"]): Array<LLMToolDefinition> {
+  return (tools ?? []).flatMap((tool) => {
+    if (
+      !isRecord(tool) ||
+      typeof tool.name !== "string" ||
+      !tool.name.trim() ||
+      typeof tool.description !== "string" ||
+      !isRecord(tool.inputSchema)
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      },
+    ];
+  });
+}
+
+function toolCallId(prefix: string) {
+  return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+function parseToolArguments(raw: string): Record<string, unknown> {
+  const normalized = raw.trim();
+  if (!normalized) return {};
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function openAiContentToText(content: unknown) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+
+  return content
+    .map((part) => {
+      if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") {
+        return "";
+      }
+      return part.text;
+    })
+    .join("");
+}
+
+function toOpenAiMessages(systemPrompt: string | undefined, messages: Array<LLMMessage>) {
+  const input: Array<Record<string, unknown>> = [];
+
+  if (systemPrompt) {
+    input.push({ role: "system", content: systemPrompt });
+  }
+
+  for (const message of messages) {
+    if (message.role === "system") {
+      input.push({ role: "system", content: message.content });
+      continue;
+    }
+
+    if (message.role === "user") {
+      input.push({ role: "user", content: message.content });
+      continue;
+    }
+
+    if (message.role === "assistant" && "toolCalls" in message) {
+      input.push({
+        role: "assistant",
+        content: message.content ?? "",
+        tool_calls: message.toolCalls.map((toolCall) => ({
+          id: toolCall.id,
+          type: "function",
+          function: {
+            name: toolCall.name,
+            arguments: toolCall.arguments,
+          },
+        })),
+      });
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      input.push({ role: "assistant", content: message.content });
+      continue;
+    }
+
+    input.push({
+      role: "tool",
+      tool_call_id: message.toolCallId,
+      content: message.content,
+    });
+  }
+
+  return input;
+}
+
+function toGoogleContents(messages: Array<LLMMessage>) {
+  const contents: Array<Record<string, unknown>> = [];
+
+  for (const message of messages) {
+    if (message.role === "system") continue;
+
+    if (message.role === "user") {
+      contents.push({
+        role: "user",
+        parts: [{ text: message.content }],
+      });
+      continue;
+    }
+
+    if (message.role === "assistant" && "toolCalls" in message) {
+      const parts = [
+        ...(message.content?.trim() ? [{ text: message.content }] : []),
+        ...message.toolCalls.map((toolCall) => ({
+          functionCall: {
+            id: toolCall.id,
+            name: toolCall.name,
+            args: parseToolArguments(toolCall.arguments),
+          },
+        })),
+      ];
+
+      contents.push({
+        role: "model",
+        parts,
+      });
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      contents.push({
+        role: "model",
+        parts: [{ text: message.content }],
+      });
+      continue;
+    }
+
+    contents.push({
+      role: "user",
+      parts: [
+        {
+          functionResponse: {
+            id: message.toolCallId,
+            name: message.name,
+            response: {
+              content: message.content,
+            },
+          },
+        },
+      ],
+    });
+  }
+
+  return contents;
+}
+
+async function generateOpenAiTurn({
+  model,
+  token,
+  systemPrompt,
+  messages,
+  tools,
+}: {
+  model: string;
+  token: string;
+  systemPrompt?: string;
+  messages: Array<LLMMessage>;
+  tools: Array<LLMToolDefinition>;
+}): Promise<LLMTurnResponse> {
+  const client = new OpenAI({ apiKey: token });
+  const response = await client.chat.completions.create({
+    model,
+    messages: toOpenAiMessages(systemPrompt, messages) as never,
+    ...(tools.length
+      ? {
+          tools: tools.map((tool) => ({
+            type: "function" as const,
+            function: {
+              name: tool.name,
+              description: tool.description,
+              parameters: tool.inputSchema,
+            },
+          })),
+          tool_choice: "auto" as const,
+        }
+      : {}),
+  });
+
+  const assistant = response.choices[0]?.message;
+  if (!assistant) {
+    throw new Error("OpenAI did not return a message.");
+  }
+
+  const toolCalls = (assistant.tool_calls ?? []).flatMap<LLMToolCall>((toolCall) => {
+    if (toolCall.type !== "function" || !toolCall.function.name) {
+      return [];
+    }
+
+    return [
+      {
+        id: toolCall.id,
+        name: toolCall.function.name,
+        arguments: toolCall.function.arguments ?? "{}",
+      },
+    ];
+  });
+
+  if (toolCalls.length > 0) {
+    return {
+      output: {
+        type: "tool_calls",
+        toolCalls,
+      },
+    };
+  }
+
+  const message: LLMAssistantTextMessage = {
+    role: "assistant",
+    content: openAiContentToText(assistant.content).trim(),
+  };
+
+  return {
+    output: {
+      type: "message",
+      message,
+    },
+  };
+}
+
+async function generateGoogleTurn({
+  model,
+  token,
+  systemPrompt,
+  messages,
+  tools,
+}: {
+  model: string;
+  token: string;
+  systemPrompt?: string;
+  messages: Array<LLMMessage>;
+  tools: Array<LLMToolDefinition>;
+}): Promise<LLMTurnResponse> {
+  const ai = new GoogleGenAI({ apiKey: token });
+  const response = await ai.models.generateContent({
+    model,
+    contents: toGoogleContents(messages),
+    config: {
+      ...(systemPrompt ? { systemInstruction: systemPrompt } : {}),
+      ...(tools.length
+        ? {
+            tools: [
+              {
+                functionDeclarations: tools.map((tool) => ({
+                  name: tool.name,
+                  description: tool.description,
+                  parametersJsonSchema: tool.inputSchema,
+                })),
+              },
+            ],
+          }
+        : {}),
+    },
+  });
+
+  const toolCalls = (response.functionCalls ?? [])
+    .filter((toolCall) => typeof toolCall.name === "string" && !!toolCall.name.trim())
+    .map<LLMToolCall>((toolCall) => ({
+      id: toolCall.id ?? toolCallId("google_call"),
+      name: toolCall.name ?? "unknown",
+      arguments: JSON.stringify(toolCall.args ?? {}),
+    }));
+
+  if (toolCalls.length > 0) {
+    return {
+      output: {
+        type: "tool_calls",
+        toolCalls,
+      },
+    };
+  }
+
+  const message: LLMAssistantTextMessage = {
+    role: "assistant",
+    content: response.text?.trim() ?? "",
+  };
+
+  return {
+    output: {
+      type: "message",
+      message,
+    },
+  };
 }
 
 function createSseStream(
@@ -130,6 +522,40 @@ async function streamOpenAiChat(
 }
 
 app.get("/api/health", (c) => c.json({ ok: true }));
+
+app.post("/api/llm/turn", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as LLMTurnRequest | null;
+
+  if (!body || !isProvider(body.provider)) {
+    return c.json({ error: "Unsupported LLM provider." }, 400);
+  }
+
+  const model = body.model?.trim();
+  const token = body.token?.trim();
+  const systemPrompt = body.systemPrompt?.trim();
+  const messages = sanitizeLlmMessages(body.messages);
+  const tools = sanitizeLlmTools(body.tools);
+
+  if (!model || !token || !messages.length) {
+    return c.json({ error: "Provider, model, token, and messages are required." }, 400);
+  }
+
+  try {
+    const response =
+      body.provider === "google"
+        ? await generateGoogleTurn({ model, token, systemPrompt, messages, tools })
+        : await generateOpenAiTurn({ model, token, systemPrompt, messages, tools });
+
+    return c.json(response);
+  } catch (error) {
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "LLM request failed.",
+      },
+      500,
+    );
+  }
+});
 
 app.post("/api/llm/chat", async (c) => {
   const body = (await c.req.json().catch(() => null)) as ChatRequestBody | null;

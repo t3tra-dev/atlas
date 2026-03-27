@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildDocumentSnapshot } from "@/lib/document-snapshot";
 import {
   createEditableLLMConfig,
   hasCompleteLLMConfig,
@@ -20,7 +21,9 @@ import {
   saveLLMConfig,
   type LLMProvider,
 } from "@/lib/llm-config";
+import { runLlmSession, type LocalLlmTool } from "@/lib/llm-session";
 import { cn } from "@/lib/utils";
+import type { LLMMessage } from "@/shared/llm";
 import {
   ChevronLeftIcon,
   ListIcon,
@@ -62,11 +65,14 @@ type ChatPanelView = "conversation" | "threads";
 const CHAT_HISTORY_STORAGE_KEY = "atlas.chat.history";
 const EMPTY_THREAD_TITLE = "新規スレッド";
 
-type StreamEvent =
-  | { event: "delta"; payload: { delta?: string } }
-  | { event: "ready"; payload: Record<string, never> }
-  | { event: "done"; payload: Record<string, never> }
-  | { event: "error"; payload: { error?: string } };
+const ATLAS_CHAT_SYSTEM_PROMPT = [
+  "You are Atlas, an assistant embedded in a visual document editor.",
+  "Help the user understand and work with the currently open Atlas document.",
+  "When the user asks about the current document, canvas, nodes, edges, or selection, call get_current_document_state before answering.",
+  "Base statements about the current document only on tool results.",
+  "Respond in the user's language.",
+  "Keep answers concrete and concise.",
+].join("\n");
 
 function createMessageId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -224,44 +230,6 @@ function formatThreadPreview(thread: ChatThread) {
   return normalized.length > 48 ? `${normalized.slice(0, 48)}...` : normalized;
 }
 
-async function* readSseStream(stream: ReadableStream<Uint8Array>) {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-      let boundaryIndex = buffer.indexOf("\n\n");
-
-      while (boundaryIndex >= 0) {
-        const rawEvent = buffer.slice(0, boundaryIndex);
-        buffer = buffer.slice(boundaryIndex + 2);
-
-        const lines = rawEvent.split("\n");
-        const eventLine = lines.find((line) => line.startsWith("event:"));
-        const data = lines
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trim())
-          .join("\n");
-
-        if (eventLine && data) {
-          const event = eventLine.slice(6).trim() as StreamEvent["event"];
-          const payload = JSON.parse(data) as StreamEvent["payload"];
-          yield { event, payload } as StreamEvent;
-        }
-
-        boundaryIndex = buffer.indexOf("\n\n");
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 function ChatSettingsForm({
   config,
   disabled,
@@ -335,14 +303,15 @@ function ChatSettingsForm({
   );
 }
 
-export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
-  void selectedNode;
+export function ChatSidePanel({
+  doc,
+  activeDocId,
+  selectedNode,
+  selectedEdge,
+  isActive,
+}: ChatSidePanelProps) {
   const conversationRef = React.useRef<HTMLDivElement | null>(null);
   const wasActiveRef = React.useRef(isActive);
-  const streamBufferRef = React.useRef("");
-  const streamFrameRef = React.useRef<number | null>(null);
-  const activeAssistantMessageIdRef = React.useRef<string | null>(null);
-  const activeAssistantThreadIdRef = React.useRef<string | null>(null);
   const [savedConfig, setSavedConfig] = React.useState(() => loadSavedLLMConfig());
   const [draftConfig, setDraftConfig] = React.useState<EditableLLMConfig>(() =>
     createEditableLLMConfig(loadSavedLLMConfig()),
@@ -366,6 +335,32 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
     [chatHistory],
   );
   const messages = React.useMemo(() => activeThread?.messages ?? [], [activeThread]);
+  const llmTools = React.useMemo<Array<LocalLlmTool>>(
+    () => [
+      {
+        name: "get_current_document_state",
+        description:
+          "Returns the current Atlas document state including title, selection, nodes, edges, camera, and canvas settings.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+        execute: async () =>
+          JSON.stringify(
+            buildDocumentSnapshot({
+              doc,
+              activeDocId,
+              selectedNodeId: selectedNode?.id ?? null,
+              selectedEdgeId: selectedEdge?.id ?? null,
+            }),
+            null,
+            2,
+          ),
+      },
+    ],
+    [activeDocId, doc, selectedEdge?.id, selectedNode?.id],
+  );
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -401,44 +396,6 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
     setError(null);
     setIsSettingsOpen(false);
   }, [draftConfig]);
-
-  const flushStreamBuffer = React.useCallback((threadId: string, assistantMessageId: string) => {
-    const delta = streamBufferRef.current;
-    if (!delta) return;
-
-    streamBufferRef.current = "";
-    React.startTransition(() => {
-      setChatHistory((current) =>
-        upsertThread(
-          current,
-          {
-            ...(current.threads.find((thread) => thread.id === threadId) ?? createEmptyThread()),
-            id: threadId,
-            updatedAt: Date.now(),
-            messages: (
-              current.threads.find((thread) => thread.id === threadId)?.messages ?? []
-            ).map((message) =>
-              message.id === assistantMessageId
-                ? { ...message, content: `${message.content}${delta}` }
-                : message,
-            ),
-          },
-          current.activeThreadId,
-        ),
-      );
-    });
-  }, []);
-
-  const scheduleStreamFlush = React.useCallback(
-    (threadId: string, assistantMessageId: string) => {
-      if (streamFrameRef.current != null) return;
-      streamFrameRef.current = window.requestAnimationFrame(() => {
-        streamFrameRef.current = null;
-        flushStreamBuffer(threadId, assistantMessageId);
-      });
-    },
-    [flushStreamBuffer],
-  );
 
   const openNewThread = React.useCallback(() => {
     if (isSubmitting) return;
@@ -526,9 +483,6 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
       role: "user",
       content,
     };
-    const assistantMessageId = createMessageId();
-    activeAssistantMessageIdRef.current = assistantMessageId;
-    activeAssistantThreadIdRef.current = threadId;
     const nextMessages = [...currentMessages, userMessage];
 
     setChatHistory((current) =>
@@ -537,14 +491,7 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
         {
           id: threadId,
           title: currentTitle === EMPTY_THREAD_TITLE ? summarizeThread(nextMessages) : currentTitle,
-          messages: [
-            ...nextMessages,
-            {
-              id: assistantMessageId,
-              role: "assistant",
-              content: "",
-            },
-          ],
+          messages: nextMessages,
           createdAt: activeThread?.createdAt ?? now,
           updatedAt: now,
         },
@@ -554,84 +501,58 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
     setDraft("");
     setError(null);
     setIsSubmitting(true);
-    setActiveAssistantMessageId(assistantMessageId);
-    streamBufferRef.current = "";
+    setActiveAssistantMessageId(null);
 
     try {
-      const response = await fetch("/api/llm/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "text/event-stream",
-        },
-        body: JSON.stringify({
-          provider: savedConfig.provider,
-          model: savedConfig.model,
-          token: savedConfig.token,
-          messages: nextMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-        }),
+      const llmMessages: Array<LLMMessage> = nextMessages.map((message) =>
+        message.role === "user"
+          ? {
+              role: "user",
+              content: message.content,
+            }
+          : {
+              role: "assistant",
+              content: message.content,
+            },
+      );
+
+      const result = await runLlmSession({
+        provider: savedConfig.provider,
+        model: savedConfig.model,
+        token: savedConfig.token,
+        systemPrompt: ATLAS_CHAT_SYSTEM_PROMPT,
+        messages: llmMessages,
+        tools: llmTools,
       });
 
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error || "LLM request failed.");
-      }
-
-      if (!response.body) {
-        throw new Error("Streaming response body is not available.");
-      }
-
-      let receivedAnyDelta = false;
-      for await (const event of readSseStream(response.body)) {
-        if (event.event === "ready") {
-          continue;
-        }
-
-        if (event.event === "delta") {
-          const delta = event.payload.delta ?? "";
-          if (!delta) continue;
-          receivedAnyDelta = true;
-          streamBufferRef.current += delta;
-          scheduleStreamFlush(threadId, assistantMessageId);
-          continue;
-        }
-
-        if (event.event === "error") {
-          throw new Error(event.payload.error || "LLM request failed.");
-        }
-
-        if (event.event === "done") {
-          flushStreamBuffer(threadId, assistantMessageId);
-          break;
-        }
-      }
-
-      if (!receivedAnyDelta) {
-        setChatHistory((current) =>
-          upsertThread(
-            current,
-            {
-              ...(current.threads.find((thread) => thread.id === threadId) ?? createEmptyThread()),
-              id: threadId,
-              updatedAt: Date.now(),
-              messages: (
-                current.threads.find((thread) => thread.id === threadId)?.messages ?? []
-              ).filter((message) => message.id !== assistantMessageId),
-            },
-            current.activeThreadId,
-          ),
-        );
+      const assistantContent = result.assistantMessage.content.trim();
+      if (!assistantContent) {
         throw new Error("LLM returned an empty response.");
       }
+
+      setChatHistory((current) =>
+        upsertThread(
+          current,
+          {
+            ...(current.threads.find((thread) => thread.id === threadId) ?? createEmptyThread()),
+            id: threadId,
+            title:
+              currentTitle === EMPTY_THREAD_TITLE ? summarizeThread(nextMessages) : currentTitle,
+            createdAt: activeThread?.createdAt ?? now,
+            updatedAt: Date.now(),
+            messages: [
+              ...(current.threads.find((thread) => thread.id === threadId)?.messages ?? []),
+              {
+                id: createMessageId(),
+                role: "assistant",
+                content: assistantContent,
+              },
+            ],
+          },
+          current.activeThreadId,
+        ),
+      );
     } catch (caughtError) {
-      if (streamFrameRef.current != null) {
-        window.cancelAnimationFrame(streamFrameRef.current);
-        streamFrameRef.current = null;
-      }
-      streamBufferRef.current = "";
       setChatHistory((current) =>
         upsertThread(
           current,
@@ -639,28 +560,17 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
             ...(current.threads.find((thread) => thread.id === threadId) ?? createEmptyThread()),
             id: threadId,
             updatedAt: Date.now(),
-            messages: (
-              current.threads.find((thread) => thread.id === threadId)?.messages ?? []
-            ).filter((message) => message.content.trim() || message.role === "user"),
+            messages: current.threads.find((thread) => thread.id === threadId)?.messages ?? [],
           },
           current.activeThreadId,
         ),
       );
       setError(caughtError instanceof Error ? caughtError.message : "LLM request failed.");
     } finally {
-      if (streamFrameRef.current != null) {
-        window.cancelAnimationFrame(streamFrameRef.current);
-        streamFrameRef.current = null;
-      }
-      if (activeAssistantThreadIdRef.current && activeAssistantMessageIdRef.current) {
-        flushStreamBuffer(activeAssistantThreadIdRef.current, activeAssistantMessageIdRef.current);
-      }
-      activeAssistantThreadIdRef.current = null;
-      activeAssistantMessageIdRef.current = null;
       setActiveAssistantMessageId(null);
       setIsSubmitting(false);
     }
-  }, [activeThread, draft, flushStreamBuffer, isSubmitting, savedConfig, scheduleStreamFlush]);
+  }, [activeThread, draft, isSubmitting, llmTools, savedConfig]);
 
   const onDraftKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {

@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { DocEdge, DocNode } from "@/components/document/model";
+import type { DocEdge, DocNode, DocumentModel } from "@/components/document/model";
 import type { NodeRegistry } from "@/components/document/plugin-system";
 import { ChatSidePanel } from "./chat";
 import { EdgeSidePanel } from "./edge";
@@ -11,6 +11,8 @@ export type { EditorSidePanelMode } from "./types";
 export function DocumentEditorSidePanel({
   visible,
   mode,
+  doc,
+  activeDocId,
   selectedNode,
   selectedEdge,
   nodeRegistry,
@@ -20,6 +22,8 @@ export function DocumentEditorSidePanel({
 }: {
   visible: boolean;
   mode: EditorSidePanelMode;
+  doc: DocumentModel;
+  activeDocId?: string;
   selectedNode: DocNode | null;
   selectedEdge: DocEdge | null;
   nodeRegistry: NodeRegistry;
@@ -35,7 +39,13 @@ export function DocumentEditorSidePanel({
       )}
     >
       <div className={mode === "chat" ? "h-full" : "hidden"}>
-        <ChatSidePanel selectedNode={selectedNode} isActive={mode === "chat"} />
+        <ChatSidePanel
+          doc={doc}
+          activeDocId={activeDocId}
+          selectedNode={selectedNode}
+          selectedEdge={selectedEdge}
+          isActive={mode === "chat"}
+        />
       </div>
 
       {mode === "node" && selectedNode ? (

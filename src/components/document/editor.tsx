@@ -456,6 +456,8 @@ export function DocumentEditor({ className }: { className?: string }) {
         <DocumentEditorSidePanel
           visible={showSidePanel}
           mode={sidePanelMode}
+          doc={doc}
+          activeDocId={activeDoc?.id}
           selectedNode={selectedNode}
           selectedEdge={selectedEdge}
           nodeRegistry={nodeRegistry}
