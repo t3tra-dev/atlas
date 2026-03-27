@@ -24,4 +24,5 @@ export type ChatSidePanelProps = {
   selectedNode: DocNode | null;
   selectedEdge: DocEdge | null;
   isActive: boolean;
+  onElementReferenceActivate?: (elementId: string) => void;
 };

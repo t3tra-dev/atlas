@@ -92,6 +92,17 @@ function sanitizeLLMMessages(messages: LLMTurnRequest["messages"]): Array<LLMMes
             id: toolCall.id,
             name: toolCall.name,
             arguments: toolCall.arguments,
+            ...(isRecord(toolCall.extraContent) &&
+            isRecord(toolCall.extraContent.google) &&
+            typeof toolCall.extraContent.google.thoughtSignature === "string"
+              ? {
+                  extraContent: {
+                    google: {
+                      thoughtSignature: toolCall.extraContent.google.thoughtSignature,
+                    },
+                  },
+                }
+              : {}),
           }));
 
         if (toolCalls.length > 0) {
@@ -250,6 +261,11 @@ function toGoogleContents(messages: Array<LLMMessage>) {
       const parts = [
         ...(message.content?.trim() ? [{ text: message.content }] : []),
         ...message.toolCalls.map((toolCall) => ({
+          ...(isRecord(toolCall.extraContent) &&
+          isRecord(toolCall.extraContent.google) &&
+          typeof toolCall.extraContent.google.thoughtSignature === "string"
+            ? { thoughtSignature: toolCall.extraContent.google.thoughtSignature }
+            : {}),
           functionCall: {
             id: toolCall.id,
             name: toolCall.name,
@@ -290,6 +306,44 @@ function toGoogleContents(messages: Array<LLMMessage>) {
   }
 
   return contents;
+}
+
+function extractGoogleToolCalls(response: Record<string, unknown>) {
+  const firstCandidate = Array.isArray(response.candidates) ? response.candidates[0] : null;
+  const content =
+    isRecord(firstCandidate) && isRecord(firstCandidate.content) ? firstCandidate.content : null;
+  const parts = content && Array.isArray(content.parts) ? content.parts : [];
+
+  return parts.flatMap<LLMToolCall>((part) => {
+    if (!isRecord(part) || !isRecord(part.functionCall)) return [];
+
+    const functionCall = part.functionCall;
+    if (typeof functionCall.name !== "string" || !functionCall.name.trim()) {
+      return [];
+    }
+
+    const args = isRecord(functionCall.args) ? functionCall.args : {};
+
+    return [
+      {
+        id:
+          typeof functionCall.id === "string" && functionCall.id.trim()
+            ? functionCall.id
+            : toolCallId("google_call"),
+        name: functionCall.name,
+        arguments: JSON.stringify(args),
+        ...(typeof part.thoughtSignature === "string"
+          ? {
+              extraContent: {
+                google: {
+                  thoughtSignature: part.thoughtSignature,
+                },
+              },
+            }
+          : {}),
+      },
+    ];
+  });
 }
 
 async function generateOpenAiTurn({
@@ -400,13 +454,7 @@ async function generateGoogleTurn({
     },
   });
 
-  const toolCalls = (response.functionCalls ?? [])
-    .filter((toolCall) => typeof toolCall.name === "string" && !!toolCall.name.trim())
-    .map<LLMToolCall>((toolCall) => ({
-      id: toolCall.id ?? toolCallId("google_call"),
-      name: toolCall.name ?? "unknown",
-      arguments: JSON.stringify(toolCall.args ?? {}),
-    }));
+  const toolCalls = extractGoogleToolCalls(response as unknown as Record<string, unknown>);
 
   if (toolCalls.length > 0) {
     return {

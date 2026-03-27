@@ -30,6 +30,8 @@ import { cn } from "@/lib/utils";
 
 export function DocumentEditor({ className }: { className?: string }) {
   const viewportRef = React.useRef<HTMLDivElement | null>(null);
+  const cameraAnimationFrameRef = React.useRef<number | null>(null);
+  const resetStateDocIdRef = React.useRef<string | undefined>(undefined);
   const fallbackDoc = React.useMemo(() => createDefaultDocument(), []);
 
   const { activeDoc, setActiveDoc } = useDocumentStore();
@@ -99,6 +101,13 @@ export function DocumentEditor({ className }: { className?: string }) {
     [commitCamera],
   );
 
+  const cancelCameraAnimation = React.useCallback(() => {
+    if (cameraAnimationFrameRef.current != null) {
+      window.cancelAnimationFrame(cameraAnimationFrameRef.current);
+      cameraAnimationFrameRef.current = null;
+    }
+  }, []);
+
   const [tool, setTool] = React.useState<Tool>({ kind: "select" });
   const [selection, setSelection] = React.useState<Selection>({ kind: "none" });
   const [drag, setDrag] = React.useState<DragState>({ kind: "none" });
@@ -127,7 +136,13 @@ export function DocumentEditor({ className }: { className?: string }) {
   });
 
   React.useEffect(() => {
+    if (resetStateDocIdRef.current === activeDoc?.id) {
+      return;
+    }
+
+    resetStateDocIdRef.current = activeDoc?.id;
     cancelMermaidAnimation();
+    cancelCameraAnimation();
     if (cameraCommitTimerRef.current != null) {
       window.clearTimeout(cameraCommitTimerRef.current);
       cameraCommitTimerRef.current = null;
@@ -138,17 +153,101 @@ export function DocumentEditor({ className }: { className?: string }) {
     setConnectPreview(null);
     setChatOpen(false);
     setCameraState(doc.camera);
-  }, [activeDoc?.id, cancelMermaidAnimation, doc.camera, setCameraState]);
+  }, [activeDoc?.id, cancelCameraAnimation, cancelMermaidAnimation, doc.camera, setCameraState]);
 
   React.useEffect(() => {
     return () => {
       cancelMermaidAnimation();
+      cancelCameraAnimation();
       if (cameraCommitTimerRef.current != null) {
         window.clearTimeout(cameraCommitTimerRef.current);
         cameraCommitTimerRef.current = null;
       }
     };
-  }, [cancelMermaidAnimation]);
+  }, [cancelCameraAnimation, cancelMermaidAnimation]);
+
+  const focusElementReference = React.useCallback(
+    (elementId: string) => {
+      const viewportEl = viewportRef.current;
+      if (!viewportEl) return;
+
+      setChatOpen(true);
+
+      const kind = elementId.startsWith("edge_")
+        ? "edge"
+        : elementId.startsWith("node_")
+          ? "node"
+          : null;
+      if (!kind) return;
+
+      setSelection(
+        kind === "node" ? { kind: "node", id: elementId } : { kind: "edge", id: elementId },
+      );
+
+      const selector =
+        kind === "node"
+          ? `[data-atlas-node-id="${elementId}"]`
+          : `[data-atlas-edge-id="${elementId}"]`;
+      const target = viewportEl.querySelector<HTMLElement | SVGElement>(selector);
+      if (!target) return;
+
+      const centerX = Number(target.getAttribute("data-atlas-center-x"));
+      const centerY = Number(target.getAttribute("data-atlas-center-y"));
+      if (!Number.isFinite(centerX) || !Number.isFinite(centerY)) return;
+
+      const sidePanelEl = viewportEl.parentElement?.querySelector<HTMLElement>(
+        '[data-atlas-side-panel="true"]',
+      );
+      const occludedWidth =
+        sidePanelEl && sidePanelEl.offsetParent !== null
+          ? sidePanelEl.getBoundingClientRect().width
+          : 0;
+      const visibleCenterScreenX = Math.max(0, (viewportSize.width - occludedWidth) / 2);
+      const visibleCenterScreenY = viewportSize.height / 2;
+
+      const startCamera = cameraRef.current;
+      const targetCamera = {
+        x: centerX - visibleCenterScreenX / startCamera.scale,
+        y: centerY - visibleCenterScreenY / startCamera.scale,
+        scale: startCamera.scale,
+      };
+
+      cancelCameraAnimation();
+
+      const startAt = performance.now();
+      const durationMs = 200;
+      const easeOutCubic = (progress: number) => 1 - (1 - progress) ** 3;
+
+      const animate = (timestamp: number) => {
+        const progress = Math.min(1, (timestamp - startAt) / durationMs);
+        const eased = easeOutCubic(progress);
+
+        setCameraState({
+          x: startCamera.x + (targetCamera.x - startCamera.x) * eased,
+          y: startCamera.y + (targetCamera.y - startCamera.y) * eased,
+          scale: startCamera.scale,
+        });
+
+        if (progress < 1) {
+          cameraAnimationFrameRef.current = window.requestAnimationFrame(animate);
+          return;
+        }
+
+        cameraAnimationFrameRef.current = null;
+        setCameraState(targetCamera);
+        scheduleCameraCommit(0);
+      };
+
+      cameraAnimationFrameRef.current = window.requestAnimationFrame(animate);
+    },
+    [
+      cancelCameraAnimation,
+      scheduleCameraCommit,
+      setCameraState,
+      viewportSize.height,
+      viewportSize.width,
+    ],
+  );
 
   const viewportRect = React.useCallback(
     () => viewportRef.current?.getBoundingClientRect() ?? null,
@@ -464,6 +563,7 @@ export function DocumentEditor({ className }: { className?: string }) {
           setDoc={setDoc}
           onDeleteSelected={deleteSelected}
           atlasIOError={atlasIOError}
+          onElementReferenceActivate={focusElementReference}
         />
       </div>
 

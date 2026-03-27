@@ -114,9 +114,20 @@ export function DocumentEditorCanvas({
               ? Math.min(240, Math.max(44, labelText.length * 7 + 16))
               : 0;
             const labelHeight = labelText ? 24 : 0;
+            const edgeCenterX = labelPos
+              ? labelPos.x
+              : (fromNode.x + fromNode.w / 2 + (toNode.x + toNode.w / 2)) / 2;
+            const edgeCenterY = labelPos
+              ? labelPos.y
+              : (fromNode.y + fromNode.h / 2 + (toNode.y + toNode.h / 2)) / 2;
 
             return (
-              <g key={edgeId}>
+              <g
+                key={edgeId}
+                data-atlas-edge-id={edgeId}
+                data-atlas-center-x={edgeCenterX}
+                data-atlas-center-y={edgeCenterY}
+              >
                 {selected ? (
                   <path
                     d={path}
@@ -136,6 +147,9 @@ export function DocumentEditorCanvas({
                   strokeDasharray={strokeDasharray}
                   markerEnd={markerEnd}
                   markerStart={markerStart}
+                  data-atlas-edge-id={edgeId}
+                  data-atlas-center-x={edgeCenterX}
+                  data-atlas-center-y={edgeCenterY}
                   style={{ cursor: "pointer" }}
                   onPointerDown={(e) => onEdgePointerDown(edgeId, e)}
                 />
@@ -209,6 +223,10 @@ export function DocumentEditorCanvas({
           return (
             <NodeView
               key={nodeId}
+              worldCenter={{
+                x: node.x + node.w / 2,
+                y: node.y + node.h / 2,
+              }}
               node={
                 {
                   ...node,

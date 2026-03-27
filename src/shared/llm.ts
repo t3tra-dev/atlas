@@ -4,6 +4,11 @@ export type LLMToolCall = {
   id: string;
   name: string;
   arguments: string;
+  extraContent?: {
+    google?: {
+      thoughtSignature?: string;
+    };
+  };
 };
 
 export type LLMUserMessage = {

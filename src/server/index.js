@@ -45,6 +45,17 @@ function sanitizeLLMMessages(messages) {
                     id: toolCall.id,
                     name: toolCall.name,
                     arguments: toolCall.arguments,
+                    ...(isRecord(toolCall.extraContent) &&
+                        isRecord(toolCall.extraContent.google) &&
+                        typeof toolCall.extraContent.google.thoughtSignature === "string"
+                        ? {
+                            extraContent: {
+                                google: {
+                                    thoughtSignature: toolCall.extraContent.google.thoughtSignature,
+                                },
+                            },
+                        }
+                        : {}),
                 }));
                 if (toolCalls.length > 0) {
                     sanitized.push({
@@ -181,6 +192,11 @@ function toGoogleContents(messages) {
             const parts = [
                 ...(message.content?.trim() ? [{ text: message.content }] : []),
                 ...message.toolCalls.map((toolCall) => ({
+                    ...(isRecord(toolCall.extraContent) &&
+                        isRecord(toolCall.extraContent.google) &&
+                        typeof toolCall.extraContent.google.thoughtSignature === "string"
+                        ? { thoughtSignature: toolCall.extraContent.google.thoughtSignature }
+                        : {}),
                     functionCall: {
                         id: toolCall.id,
                         name: toolCall.name,
@@ -217,6 +233,38 @@ function toGoogleContents(messages) {
         });
     }
     return contents;
+}
+function extractGoogleToolCalls(response) {
+    const firstCandidate = Array.isArray(response.candidates) ? response.candidates[0] : null;
+    const content = isRecord(firstCandidate) && isRecord(firstCandidate.content) ? firstCandidate.content : null;
+    const parts = content && Array.isArray(content.parts) ? content.parts : [];
+    return parts.flatMap((part) => {
+        if (!isRecord(part) || !isRecord(part.functionCall))
+            return [];
+        const functionCall = part.functionCall;
+        if (typeof functionCall.name !== "string" || !functionCall.name.trim()) {
+            return [];
+        }
+        const args = isRecord(functionCall.args) ? functionCall.args : {};
+        return [
+            {
+                id: typeof functionCall.id === "string" && functionCall.id.trim()
+                    ? functionCall.id
+                    : toolCallId("google_call"),
+                name: functionCall.name,
+                arguments: JSON.stringify(args),
+                ...(typeof part.thoughtSignature === "string"
+                    ? {
+                        extraContent: {
+                            google: {
+                                thoughtSignature: part.thoughtSignature,
+                            },
+                        },
+                    }
+                    : {}),
+            },
+        ];
+    });
 }
 async function generateOpenAiTurn({ model, token, systemPrompt, messages, tools, }) {
     const client = new OpenAI({ apiKey: token });
@@ -294,13 +342,7 @@ async function generateGoogleTurn({ model, token, systemPrompt, messages, tools,
                 : {}),
         },
     });
-    const toolCalls = (response.functionCalls ?? [])
-        .filter((toolCall) => typeof toolCall.name === "string" && !!toolCall.name.trim())
-        .map((toolCall) => ({
-        id: toolCall.id ?? toolCallId("google_call"),
-        name: toolCall.name ?? "unknown",
-        arguments: JSON.stringify(toolCall.args ?? {}),
-    }));
+    const toolCalls = extractGoogleToolCalls(response);
     if (toolCalls.length > 0) {
         return {
             output: {

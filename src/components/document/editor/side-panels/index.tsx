@@ -19,6 +19,7 @@ export function DocumentEditorSidePanel({
   setDoc,
   onDeleteSelected,
   atlasIOError,
+  onElementReferenceActivate,
 }: {
   visible: boolean;
   mode: EditorSidePanelMode;
@@ -30,9 +31,11 @@ export function DocumentEditorSidePanel({
   setDoc: SetDocument;
   onDeleteSelected: () => void;
   atlasIOError: string | null;
+  onElementReferenceActivate?: (elementId: string) => void;
 }) {
   return (
     <div
+      data-atlas-side-panel="true"
       className={cn(
         "absolute right-0 top-0 z-[2147483647] hidden h-full w-[320px] border-l bg-background p-3 transition-opacity duration-150 md:block",
         visible ? "opacity-100" : "pointer-events-none opacity-0",
@@ -45,6 +48,7 @@ export function DocumentEditorSidePanel({
           selectedNode={selectedNode}
           selectedEdge={selectedEdge}
           isActive={mode === "chat"}
+          onElementReferenceActivate={onElementReferenceActivate}
         />
       </div>
 

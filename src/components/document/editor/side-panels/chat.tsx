@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,6 +27,7 @@ import { runLLMSession, type LocalLLMTool } from "@/lib/llm-session";
 import { cn } from "@/lib/utils";
 import type { LLMMessage } from "@/shared/llm";
 import {
+  BotIcon,
   ChevronLeftIcon,
   ListIcon,
   MessageSquareIcon,
@@ -33,6 +36,14 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import type { ChatSidePanelProps } from "./types";
+
+type ElementReferenceKind = "node" | "edge";
+type MarkdownNode = {
+  type: string;
+  value?: string;
+  url?: string;
+  children?: Array<MarkdownNode>;
+};
 
 type ChatMessage = {
   id: string;
@@ -64,6 +75,8 @@ type ChatPanelView = "conversation" | "threads";
 
 const CHAT_HISTORY_STORAGE_KEY = "atlas.chat.history";
 const EMPTY_THREAD_TITLE = "新規スレッド";
+const SAFE_MARKDOWN_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:", "atlas-ref:"]);
+const ELEMENT_REFERENCE_PATTERN = /elm\[((?:node|edge)_[a-zA-Z0-9_-]+)\]/g;
 
 const ATLAS_CHAT_SYSTEM_PROMPT = [
   "You are Atlas, an assistant embedded in a visual document editor.",
@@ -71,6 +84,11 @@ const ATLAS_CHAT_SYSTEM_PROMPT = [
   "When the user asks about the current document, canvas, nodes, edges, layout, positions, relationships, camera, zoom, or selection, call get_current_document_state before answering.",
   "Base statements about the current document only on tool results.",
   "The tool returns each node's coordinates, size, center point, payload, and incoming/outgoing relations, plus camera position and zoom.",
+  "When mentioning a specific node, write its canonical reference exactly as elm[node_xxxxxxxx] using the real node id from tool output.",
+  "When mentioning a specific edge, write its canonical reference exactly as elm[edge_xxxxxxxx] using the real edge id from tool output.",
+  "Never invent ids or elm[...] references. If unsure, do not emit a reference token.",
+  "Do not repeat the element's visible name, quoted label, or title immediately next to an elm[...] reference, because the UI already renders the element label for that reference.",
+  "Prefer the bare elm[...] reference when pointing to a specific element unless extra wording is necessary for grammar or disambiguation.",
   "When describing structure, cite node ids, edge ids, directions, and relative positions clearly.",
   "Respond in the user's language.",
   "Keep answers concrete and concise.",
@@ -119,6 +137,268 @@ function createEmptyThread(title = EMPTY_THREAD_TITLE): ChatThread {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function sanitizeMarkdownUrl(url: string) {
+  if (!url) return "";
+  if (url.startsWith("#") || url.startsWith("/")) return url;
+  if (url.startsWith("//")) return "";
+
+  try {
+    const parsed = new URL(url, "https://atlas.local");
+    const hasExplicitProtocol = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
+    if (!hasExplicitProtocol) {
+      return url;
+    }
+
+    return SAFE_MARKDOWN_PROTOCOLS.has(parsed.protocol) ? url : "";
+  } catch {
+    return "";
+  }
+}
+
+function getElementReferenceKind(elementId: string): ElementReferenceKind | null {
+  if (elementId.startsWith("node_")) return "node";
+  if (elementId.startsWith("edge_")) return "edge";
+  return null;
+}
+
+function parseElementReferenceHref(href: string | undefined) {
+  if (!href?.startsWith("atlas-ref:")) return null;
+  const elementId = href.slice("atlas-ref:".length);
+  const kind = getElementReferenceKind(elementId);
+  if (!kind) return null;
+  return { kind, elementId };
+}
+
+function normalizeReferenceLabel(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 30 ? `${normalized.slice(0, 30)}...` : normalized;
+}
+
+function getNodeReferenceLabel(node: ChatSidePanelProps["doc"]["nodes"][string]) {
+  const props = (node.props ?? {}) as Record<string, unknown>;
+  const candidates = [props.name, props.title, props.label, props.text, props.fileName];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return normalizeReferenceLabel(candidate);
+    }
+  }
+
+  return node.id;
+}
+
+function getEdgeReferenceLabel(doc: ChatSidePanelProps["doc"], edgeId: string) {
+  const edge = doc.edges[edgeId];
+  if (!edge) return edgeId;
+  if (typeof edge.props.label === "string" && edge.props.label.trim()) {
+    return normalizeReferenceLabel(edge.props.label);
+  }
+
+  const fromNode = doc.nodes[edge.from];
+  const toNode = doc.nodes[edge.to];
+  if (fromNode && toNode) {
+    return `${getNodeReferenceLabel(fromNode)} -> ${getNodeReferenceLabel(toNode)}`;
+  }
+
+  return edge.id;
+}
+
+function getElementReferenceLabel(doc: ChatSidePanelProps["doc"], elementId: string) {
+  const kind = getElementReferenceKind(elementId);
+  if (kind === "node") {
+    const node = doc.nodes[elementId];
+    return node ? getNodeReferenceLabel(node) : elementId;
+  }
+  if (kind === "edge") {
+    return getEdgeReferenceLabel(doc, elementId);
+  }
+  return elementId;
+}
+
+function replaceElementReferencesInText(value: string, doc: ChatSidePanelProps["doc"]) {
+  const matches = Array.from(value.matchAll(ELEMENT_REFERENCE_PATTERN));
+  if (!matches.length) {
+    return [{ type: "text", value }] satisfies Array<MarkdownNode>;
+  }
+
+  const nodes: Array<MarkdownNode> = [];
+  let cursor = 0;
+
+  for (const match of matches) {
+    const matchedValue = match[0];
+    const elementId = match[1];
+    const index = match.index ?? 0;
+
+    if (index > cursor) {
+      nodes.push({ type: "text", value: value.slice(cursor, index) });
+    }
+
+    nodes.push({
+      type: "link",
+      url: `atlas-ref:${elementId}`,
+      children: [{ type: "text", value: getElementReferenceLabel(doc, elementId) }],
+    });
+
+    cursor = index + matchedValue.length;
+  }
+
+  if (cursor < value.length) {
+    nodes.push({ type: "text", value: value.slice(cursor) });
+  }
+
+  return nodes;
+}
+
+function createElementReferencePlugin(doc: ChatSidePanelProps["doc"]) {
+  return () => {
+    return (tree: MarkdownNode) => {
+      const visit = (node: MarkdownNode) => {
+        if (!node.children?.length) return;
+
+        node.children = node.children.flatMap((child) => {
+          if (child.type === "text" && typeof child.value === "string") {
+            return replaceElementReferencesInText(child.value, doc);
+          }
+
+          if (
+            child.type !== "inlineCode" &&
+            child.type !== "code" &&
+            child.type !== "html" &&
+            child.type !== "link"
+          ) {
+            visit(child);
+          }
+
+          return [child];
+        });
+      };
+
+      visit(tree);
+    };
+  };
+}
+
+function AssistantMessageContent({
+  content,
+  doc,
+  onElementReferenceActivate,
+}: {
+  content: string;
+  doc: ChatSidePanelProps["doc"];
+  onElementReferenceActivate?: (elementId: string) => void;
+}) {
+  const referencePlugin = React.useMemo(() => createElementReferencePlugin(doc), [doc]);
+
+  return (
+    <div className="space-y-3 break-words text-sm leading-6">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, referencePlugin]}
+        skipHtml
+        disallowedElements={["img"]}
+        urlTransform={(url) => sanitizeMarkdownUrl(url)}
+        components={{
+          p: ({ children }) => <p>{children}</p>,
+          a: ({ children, href }) => {
+            const reference = parseElementReferenceHref(href);
+            if (reference) {
+              return (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onElementReferenceActivate?.(reference.elementId);
+                  }}
+                  className="mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 align-baseline text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                >
+                  <BotIcon className="size-3 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{children}</span>
+                </button>
+              );
+            }
+
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="font-medium text-primary underline underline-offset-4"
+              >
+                {children}
+              </a>
+            );
+          },
+          ul: ({ children }) => <ul className="list-disc space-y-1 pl-5">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5">{children}</ol>,
+          li: ({ children }) => <li>{children}</li>,
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-border/80 pl-3 text-muted-foreground">
+              {children}
+            </blockquote>
+          ),
+          h1: ({ children }) => <h1 className="text-base font-semibold">{children}</h1>,
+          h2: ({ children }) => <h2 className="text-sm font-semibold">{children}</h2>,
+          h3: ({ children }) => <h3 className="text-sm font-semibold">{children}</h3>,
+          hr: () => <hr className="border-border" />,
+          pre: ({ children }) => (
+            <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs leading-5">
+              {children}
+            </pre>
+          ),
+          code: ({ children, className }) => {
+            const isBlock = Boolean(className);
+            return (
+              <code
+                className={cn(
+                  isBlock
+                    ? "font-mono"
+                    : "rounded bg-muted px-1.5 py-0.5 font-mono text-[0.8125rem]",
+                  className,
+                )}
+              >
+                {children}
+              </code>
+            );
+          },
+          table: ({ children }) => (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left text-xs">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="border-b border-border">{children}</thead>,
+          tbody: ({ children }) => <tbody>{children}</tbody>,
+          tr: ({ children }) => (
+            <tr className="border-b border-border/70 last:border-b-0">{children}</tr>
+          ),
+          th: ({ children }) => <th className="px-2 py-1.5 font-medium">{children}</th>,
+          td: ({ children }) => <td className="px-2 py-1.5 align-top">{children}</td>,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function AssistantLoadingBubble() {
+  return (
+    <div className="rounded-md border bg-background px-3 py-3 text-sm">
+      <div className="flex items-center gap-3 text-muted-foreground">
+        <div className="flex items-center gap-1.5" aria-hidden="true">
+          {[0, 1, 2].map((index) => (
+            <span
+              key={index}
+              className="size-2 rounded-full bg-current animate-bounce"
+              style={{ animationDelay: `${index * 0.15}s` }}
+            />
+          ))}
+        </div>
+        <span className="text-xs">AI が応答を生成しています...</span>
+      </div>
+    </div>
+  );
 }
 
 function normalizeThread(raw: unknown, index: number): ChatThread | null {
@@ -311,6 +591,7 @@ export function ChatSidePanel({
   selectedNode,
   selectedEdge,
   isActive,
+  onElementReferenceActivate,
 }: ChatSidePanelProps) {
   const conversationRef = React.useRef<HTMLDivElement | null>(null);
   const wasActiveRef = React.useRef(isActive);
@@ -326,9 +607,6 @@ export function ChatSidePanel({
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
-  const [activeAssistantMessageId, setActiveAssistantMessageId] = React.useState<string | null>(
-    null,
-  );
   const [threadPendingDelete, setThreadPendingDelete] = React.useState<ChatThread | null>(null);
   const activeThread = React.useMemo(
     () =>
@@ -373,7 +651,7 @@ export function ChatSidePanel({
     const viewport = conversationRef.current;
     if (!viewport) return;
     viewport.scrollTop = viewport.scrollHeight;
-  }, [messages, activeAssistantMessageId]);
+  }, [messages, isSubmitting]);
 
   React.useEffect(() => {
     if (isActive && !wasActiveRef.current) {
@@ -503,7 +781,6 @@ export function ChatSidePanel({
     setDraft("");
     setError(null);
     setIsSubmitting(true);
-    setActiveAssistantMessageId(null);
 
     try {
       const llmMessages: Array<LLMMessage> = nextMessages.map((message) =>
@@ -569,7 +846,6 @@ export function ChatSidePanel({
       );
       setError(caughtError instanceof Error ? caughtError.message : "LLM request failed.");
     } finally {
-      setActiveAssistantMessageId(null);
       setIsSubmitting(false);
     }
   }, [activeThread, draft, isSubmitting, llmTools, savedConfig]);
@@ -717,27 +993,29 @@ export function ChatSidePanel({
           <div className="flex h-full min-h-0 flex-col rounded-lg border bg-muted/20 p-3">
             <div ref={conversationRef} className="flex-1 space-y-2 overflow-y-auto">
               {messages.length ? (
-                messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={
-                      message.role === "assistant"
-                        ? "rounded-md border bg-background px-3 py-2 text-sm whitespace-pre-wrap break-words"
-                        : "rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground whitespace-pre-wrap break-words"
-                    }
-                  >
-                    {message.content || message.id === activeAssistantMessageId ? (
-                      <>
-                        {message.content}
-                        {message.id === activeAssistantMessageId ? (
-                          <span className="ml-0.5 inline-block animate-pulse align-baseline">
-                            |
-                          </span>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </div>
-                ))
+                <>
+                  {messages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={
+                        message.role === "assistant"
+                          ? "rounded-md border bg-background px-3 py-2"
+                          : "rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground whitespace-pre-wrap break-words"
+                      }
+                    >
+                      {message.role === "assistant" ? (
+                        <AssistantMessageContent
+                          content={message.content}
+                          doc={doc}
+                          onElementReferenceActivate={onElementReferenceActivate}
+                        />
+                      ) : (
+                        message.content
+                      )}
+                    </div>
+                  ))}
+                  {isSubmitting ? <AssistantLoadingBubble /> : null}
+                </>
               ) : (
                 <>
                   <div className="rounded-md bg-background px-3 py-2 text-sm">

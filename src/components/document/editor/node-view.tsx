@@ -32,6 +32,7 @@ function ResizeHandle({
 
 export function NodeView({
   node,
+  worldCenter,
   nodeDef,
   selected,
   scale,
@@ -40,6 +41,7 @@ export function NodeView({
   onDoubleClick,
 }: {
   node: DocNode;
+  worldCenter?: { x: number; y: number };
   nodeDef: NodeTypeDef;
   selected: boolean;
   scale: number;
@@ -73,6 +75,9 @@ export function NodeView({
     <div
       role="group"
       aria-label={rendered.ariaLabel ?? node.type}
+      data-atlas-node-id={node.id}
+      data-atlas-center-x={worldCenter?.x ?? node.x + node.w / 2}
+      data-atlas-center-y={worldCenter?.y ?? node.y + node.h / 2}
       className={cn(rendered.className, outlineClass)}
       style={{
         ...baseStyle,
