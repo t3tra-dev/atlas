@@ -25,7 +25,7 @@ import {
 } from "@/lib/llm-config";
 import { runLLMSession, type LocalLLMTool } from "@/lib/llm-session";
 import { cn } from "@/lib/utils";
-import type { LLMMessage } from "@/shared/llm";
+import type { LLMMessage, LLMToolCall } from "@/shared/llm";
 import {
   BotIcon,
   ChevronLeftIcon,
@@ -34,6 +34,7 @@ import {
   PlusIcon,
   Settings2Icon,
   Trash2Icon,
+  WrenchIcon,
 } from "lucide-react";
 import type { ChatSidePanelProps } from "./types";
 
@@ -45,11 +46,52 @@ type MarkdownNode = {
   children?: Array<MarkdownNode>;
 };
 
-type ChatMessage = {
+type ChatUserMessage = {
   id: string;
-  role: "user" | "assistant";
+  role: "user";
   content: string;
 };
+
+type ChatAssistantTextMessage = {
+  id: string;
+  role: "assistant";
+  kind: "text";
+  content: string;
+};
+
+type ChatAssistantToolCallMessage = {
+  id: string;
+  role: "assistant";
+  kind: "tool_calls";
+  toolCalls: Array<LLMToolCall>;
+};
+
+type ChatToolResultMessage = {
+  id: string;
+  role: "tool";
+  toolCallId: string;
+  name: string;
+  content: string;
+};
+
+type ChatMessage =
+  | ChatUserMessage
+  | ChatAssistantTextMessage
+  | ChatAssistantToolCallMessage
+  | ChatToolResultMessage;
+
+type ChatToolGroup = {
+  id: string;
+  kind: "tool_group";
+  toolCalls: Array<LLMToolCall>;
+  results: Array<ChatToolResultMessage>;
+};
+
+type ChatDisplayItem = ChatUserMessage | ChatAssistantTextMessage | ChatToolGroup;
+
+function isChatToolGroup(item: ChatDisplayItem): item is ChatToolGroup {
+  return "kind" in item && item.kind === "tool_group";
+}
 
 type ChatThread = {
   id: string;
@@ -102,25 +144,210 @@ function createThreadId() {
   return `thread-${createMessageId()}`;
 }
 
-function sanitizeMessages(value: unknown) {
+function sanitizeToolCalls(value: unknown): Array<LLMToolCall> {
   if (!Array.isArray(value)) return [];
 
-  return value.filter(
-    (message): message is ChatMessage =>
-      !!message &&
-      typeof message === "object" &&
-      "id" in message &&
-      "role" in message &&
-      "content" in message &&
-      typeof message.id === "string" &&
-      (message.role === "user" || message.role === "assistant") &&
-      typeof message.content === "string",
-  );
+  return value.flatMap((toolCall) => {
+    if (!toolCall || typeof toolCall !== "object") return [];
+
+    const candidate = toolCall as Partial<LLMToolCall>;
+    if (
+      typeof candidate.id !== "string" ||
+      typeof candidate.name !== "string" ||
+      typeof candidate.arguments !== "string" ||
+      !candidate.name.trim()
+    ) {
+      return [];
+    }
+
+    const google =
+      candidate.extraContent?.google &&
+      typeof candidate.extraContent.google === "object" &&
+      typeof candidate.extraContent.google.thoughtSignature === "string"
+        ? {
+            google: {
+              thoughtSignature: candidate.extraContent.google.thoughtSignature,
+            },
+          }
+        : undefined;
+
+    return [
+      {
+        id: candidate.id,
+        name: candidate.name,
+        arguments: candidate.arguments,
+        ...(google ? { extraContent: google } : {}),
+      },
+    ];
+  });
+}
+
+function sanitizeMessages(value: unknown): Array<ChatMessage> {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap<ChatMessage>((message) => {
+    if (!message || typeof message !== "object") return [];
+
+    const candidate = message as {
+      id?: unknown;
+      role?: unknown;
+      content?: unknown;
+      kind?: unknown;
+      toolCalls?: unknown;
+      toolCallId?: unknown;
+      name?: unknown;
+    };
+    if (typeof candidate.id !== "string") return [];
+
+    if (candidate.role === "user" && typeof candidate.content === "string") {
+      return [
+        {
+          id: candidate.id,
+          role: "user",
+          content: candidate.content,
+        } satisfies ChatUserMessage,
+      ];
+    }
+
+    if (
+      candidate.role === "assistant" &&
+      (candidate.kind === "text" || typeof candidate.kind === "undefined") &&
+      typeof candidate.content === "string"
+    ) {
+      return [
+        {
+          id: candidate.id,
+          role: "assistant",
+          kind: "text",
+          content: candidate.content,
+        } satisfies ChatAssistantTextMessage,
+      ];
+    }
+
+    if (candidate.role === "assistant" && candidate.kind === "tool_calls") {
+      const toolCalls = sanitizeToolCalls(candidate.toolCalls);
+      if (!toolCalls.length) return [];
+      return [
+        {
+          id: candidate.id,
+          role: "assistant",
+          kind: "tool_calls",
+          toolCalls,
+        } satisfies ChatAssistantToolCallMessage,
+      ];
+    }
+
+    if (
+      candidate.role === "tool" &&
+      typeof candidate.toolCallId === "string" &&
+      typeof candidate.name === "string" &&
+      typeof candidate.content === "string"
+    ) {
+      return [
+        {
+          id: candidate.id,
+          role: "tool",
+          toolCallId: candidate.toolCallId,
+          name: candidate.name,
+          content: candidate.content,
+        } satisfies ChatToolResultMessage,
+      ];
+    }
+
+    return [];
+  });
+}
+
+function getMessagePreviewText(message: ChatMessage) {
+  if (message.role === "user") return message.content;
+  if (message.role === "assistant" && message.kind === "text") return message.content;
+  if (message.role === "assistant") {
+    return message.toolCalls.map((toolCall) => toolCall.name).join(", ");
+  }
+  return `${message.name} result`;
+}
+
+function chatMessageToLLMMessage(message: ChatMessage): LLMMessage {
+  if (message.role === "user") {
+    return {
+      role: "user",
+      content: message.content,
+    };
+  }
+
+  if (message.role === "assistant" && message.kind === "text") {
+    return {
+      role: "assistant",
+      content: message.content,
+    };
+  }
+
+  if (message.role === "assistant") {
+    return {
+      role: "assistant",
+      content: "",
+      toolCalls: message.toolCalls,
+    };
+  }
+
+  return {
+    role: "tool",
+    toolCallId: message.toolCallId,
+    name: message.name,
+    content: message.content,
+  };
+}
+
+function llmMessageToChatMessages(message: LLMMessage): Array<ChatMessage> {
+  if (message.role === "system") return [];
+
+  if (message.role === "user") {
+    return [
+      {
+        id: createMessageId(),
+        role: "user",
+        content: message.content,
+      },
+    ];
+  }
+
+  if (message.role === "tool") {
+    return [
+      {
+        id: createMessageId(),
+        role: "tool",
+        toolCallId: message.toolCallId,
+        name: message.name,
+        content: message.content,
+      },
+    ];
+  }
+
+  if ("toolCalls" in message) {
+    return [
+      {
+        id: createMessageId(),
+        role: "assistant",
+        kind: "tool_calls",
+        toolCalls: message.toolCalls,
+      },
+    ];
+  }
+
+  return [
+    {
+      id: createMessageId(),
+      role: "assistant",
+      kind: "text",
+      content: message.content,
+    },
+  ];
 }
 
 function summarizeThread(messages: Array<ChatMessage>) {
   const firstUserMessage = messages.find(
-    (message) => message.role === "user" && message.content.trim(),
+    (message): message is ChatUserMessage =>
+      message.role === "user" && message.content.trim().length > 0,
   );
   if (!firstUserMessage) return EMPTY_THREAD_TITLE;
 
@@ -505,11 +732,133 @@ function upsertThread(
 }
 
 function formatThreadPreview(thread: ChatThread) {
-  const lastMessage = [...thread.messages].reverse().find((message) => message.content.trim());
+  const lastMessage = [...thread.messages]
+    .reverse()
+    .find((message) => getMessagePreviewText(message).trim());
   if (!lastMessage) return "まだメッセージはありません";
 
-  const normalized = lastMessage.content.replace(/\s+/g, " ").trim();
+  const normalized = getMessagePreviewText(lastMessage).replace(/\s+/g, " ").trim();
   return normalized.length > 48 ? `${normalized.slice(0, 48)}...` : normalized;
+}
+
+function formatStructuredContent(content: string) {
+  const normalized = content.trim();
+  if (!normalized) return "{}";
+
+  try {
+    return JSON.stringify(JSON.parse(normalized) as unknown, null, 2);
+  } catch {
+    return content;
+  }
+}
+
+function groupMessagesForDisplay(messages: Array<ChatMessage>): Array<ChatDisplayItem> {
+  const items: Array<ChatDisplayItem> = [];
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+
+    if (message.role === "assistant" && message.kind === "tool_calls") {
+      const results: Array<ChatToolResultMessage> = [];
+      let cursor = index + 1;
+
+      while (cursor < messages.length) {
+        const nextMessage = messages[cursor];
+        if (nextMessage.role !== "tool") break;
+        results.push(nextMessage);
+        cursor += 1;
+      }
+
+      items.push({
+        id: message.id,
+        kind: "tool_group",
+        toolCalls: message.toolCalls,
+        results,
+      });
+      index = cursor - 1;
+      continue;
+    }
+
+    if (message.role === "tool") {
+      continue;
+    }
+
+    items.push(message);
+  }
+
+  return items;
+}
+
+function ToolCallsMessageContent({ toolCalls }: { toolCalls: Array<LLMToolCall> }) {
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <WrenchIcon className="size-3.5" />
+        <span>Tool Calls</span>
+      </div>
+      <div className="space-y-2">
+        {toolCalls.map((toolCall, index) => (
+          <details
+            key={toolCall.id}
+            className="rounded-md border border-border bg-background open:bg-muted/30"
+          >
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm marker:hidden">
+              <div className="min-w-0">
+                <div className="truncate font-medium">{toolCall.name}</div>
+                <div className="text-xs text-muted-foreground">call #{index + 1}</div>
+              </div>
+              <span className="text-xs text-muted-foreground">arguments</span>
+            </summary>
+            <div className="border-t border-border px-3 py-2">
+              <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs leading-5 text-foreground">
+                {formatStructuredContent(toolCall.arguments)}
+              </pre>
+            </div>
+          </details>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ToolGroupMessageContent({ group }: { group: ChatToolGroup }) {
+  return (
+    <div className="space-y-3 text-sm">
+      <ToolCallsMessageContent toolCalls={group.toolCalls} />
+      {group.results.length ? (
+        <div className="space-y-2 border-t border-border/70 pt-3">
+          {group.results.map((message) => (
+            <ToolResultMessageContent key={message.id} message={message} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ToolResultMessageContent({ message }: { message: ChatToolResultMessage }) {
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <WrenchIcon className="size-3.5" />
+        <span>Tool Result</span>
+      </div>
+      <details className="rounded-md border border-border bg-background open:bg-muted/30">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm marker:hidden">
+          <div className="min-w-0">
+            <div className="truncate font-medium">{message.name}</div>
+            <div className="truncate text-xs text-muted-foreground">{message.toolCallId}</div>
+          </div>
+          <span className="text-xs text-muted-foreground">output</span>
+        </summary>
+        <div className="border-t border-border px-3 py-2">
+          <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs leading-5 text-foreground whitespace-pre-wrap break-words">
+            {formatStructuredContent(message.content)}
+          </pre>
+        </div>
+      </details>
+    </div>
+  );
 }
 
 function ChatSettingsForm({
@@ -615,6 +964,7 @@ export function ChatSidePanel({
     [chatHistory],
   );
   const messages = React.useMemo(() => activeThread?.messages ?? [], [activeThread]);
+  const displayItems = React.useMemo(() => groupMessagesForDisplay(messages), [messages]);
   const llmTools = React.useMemo<Array<LocalLLMTool>>(
     () => [
       {
@@ -651,7 +1001,7 @@ export function ChatSidePanel({
     const viewport = conversationRef.current;
     if (!viewport) return;
     viewport.scrollTop = viewport.scrollHeight;
-  }, [messages, isSubmitting]);
+  }, [displayItems, isSubmitting]);
 
   React.useEffect(() => {
     if (isActive && !wasActiveRef.current) {
@@ -758,7 +1108,7 @@ export function ChatSidePanel({
     const currentMessages = activeThread?.messages ?? [];
     const currentTitle = activeThread?.title ?? EMPTY_THREAD_TITLE;
 
-    const userMessage: ChatMessage = {
+    const userMessage: ChatUserMessage = {
       id: createMessageId(),
       role: "user",
       content,
@@ -783,17 +1133,7 @@ export function ChatSidePanel({
     setIsSubmitting(true);
 
     try {
-      const llmMessages: Array<LLMMessage> = nextMessages.map((message) =>
-        message.role === "user"
-          ? {
-              role: "user",
-              content: message.content,
-            }
-          : {
-              role: "assistant",
-              content: message.content,
-            },
-      );
+      const llmMessages: Array<LLMMessage> = nextMessages.map(chatMessageToLLMMessage);
 
       const result = await runLLMSession({
         provider: savedConfig.provider,
@@ -809,6 +1149,10 @@ export function ChatSidePanel({
         throw new Error("LLM returned an empty response.");
       }
 
+      const appendedMessages = result.transcript
+        .slice(llmMessages.length)
+        .flatMap(llmMessageToChatMessages);
+
       setChatHistory((current) =>
         upsertThread(
           current,
@@ -821,11 +1165,7 @@ export function ChatSidePanel({
             updatedAt: Date.now(),
             messages: [
               ...(current.threads.find((thread) => thread.id === threadId)?.messages ?? []),
-              {
-                id: createMessageId(),
-                role: "assistant",
-                content: assistantContent,
-              },
+              ...appendedMessages,
             ],
           },
           current.activeThreadId,
@@ -992,25 +1332,29 @@ export function ChatSidePanel({
         ) : (
           <div className="flex h-full min-h-0 flex-col rounded-lg border bg-muted/20 p-3">
             <div ref={conversationRef} className="flex-1 space-y-2 overflow-y-auto">
-              {messages.length ? (
+              {displayItems.length ? (
                 <>
-                  {messages.map((message) => (
+                  {displayItems.map((item) => (
                     <div
-                      key={message.id}
+                      key={item.id}
                       className={
-                        message.role === "assistant"
+                        isChatToolGroup(item)
+                          ? "rounded-md border border-dashed bg-background px-3 py-2"
+                          : item.role === "assistant"
                           ? "rounded-md border bg-background px-3 py-2"
                           : "rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground whitespace-pre-wrap break-words"
                       }
                     >
-                      {message.role === "assistant" ? (
+                      {isChatToolGroup(item) ? (
+                        <ToolGroupMessageContent group={item} />
+                      ) : item.role === "assistant" ? (
                         <AssistantMessageContent
-                          content={message.content}
+                          content={item.content}
                           doc={doc}
                           onElementReferenceActivate={onElementReferenceActivate}
                         />
                       ) : (
-                        message.content
+                        item.content
                       )}
                     </div>
                   ))}
