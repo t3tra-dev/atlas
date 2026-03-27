@@ -1341,8 +1341,8 @@ export function ChatSidePanel({
                         isChatToolGroup(item)
                           ? "rounded-md border border-dashed bg-background px-3 py-2"
                           : item.role === "assistant"
-                          ? "rounded-md border bg-background px-3 py-2"
-                          : "rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground whitespace-pre-wrap break-words"
+                            ? "rounded-md border bg-background px-3 py-2"
+                            : "rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground whitespace-pre-wrap break-words"
                       }
                     >
                       {isChatToolGroup(item) ? (
