@@ -1,8 +1,9 @@
 import type { DocEdge, DocNode, DocumentModel } from "@/components/document/model";
+import { createUniqueHashId } from "@/lib/hash-id";
 
 import { layoutFlowchart, layoutMindmap } from "./layout";
 import { parseMermaidFlowchart, parseMermaidMindmap } from "./parser";
-import { MERMAID_LAYOUT_ANIMATION_MS, ensureUniqueId, measurePlacedBounds } from "./shared";
+import { MERMAID_LAYOUT_ANIMATION_MS, measurePlacedBounds } from "./shared";
 
 import type { BuildMermaidOptions, MermaidBuildResult } from "./types";
 
@@ -45,6 +46,11 @@ function buildBoundsFromPlaced(
     : null;
 }
 
+function buildMermaidEntityPrefix(idPrefix: string, kind: "node" | "edge") {
+  if (!idPrefix) return kind;
+  return idPrefix.endsWith("_") ? `${idPrefix}${kind}` : `${idPrefix}_${kind}`;
+}
+
 export function buildDocumentFromMermaid(source: string): DocumentModel {
   const built = buildMermaidElements(source);
   const safeBounds = built.bounds ?? { minX: 0, minY: 0, maxX: 1200, maxY: 900 };
@@ -75,7 +81,7 @@ export function buildMermaidElements(
 ): MermaidBuildResult {
   const existingNodeIds = opts?.existingNodeIds ?? new Set<string>();
   const existingEdgeIds = opts?.existingEdgeIds ?? new Set<string>();
-  const idPrefix = opts?.idPrefix ?? "mmd_";
+  const idPrefix = opts?.idPrefix ?? "";
   const animateIn = opts?.animateIn ?? false;
 
   const trimmedSource = source.trim();
@@ -93,7 +99,11 @@ export function buildMermaidElements(
       const node = nodeById.get(id);
       const pos = layout.placed.get(id);
       if (!node || !pos) continue;
-      const docId = ensureUniqueId(`${idPrefix}node_${node.id}`, existingNodeIds);
+      const docId = createUniqueHashId(
+        buildMermaidEntityPrefix(idPrefix, "node"),
+        existingNodeIds,
+        node.id,
+      );
       idMap.set(node.id, docId);
       nodeMap[docId] = buildShapeNode(docId, pos, node.text, node.shape, node.radius);
       nodeOrder.push(docId);
@@ -105,7 +115,11 @@ export function buildMermaidElements(
       const fromId = idMap.get(edge.from);
       const toId = idMap.get(edge.to);
       if (!fromId || !toId) return;
-      const id = ensureUniqueId(`${idPrefix}edge_${index}`, existingEdgeIds);
+      const id = createUniqueHashId(
+        buildMermaidEntityPrefix(idPrefix, "edge"),
+        existingEdgeIds,
+        `${edge.from}:${edge.to}:${index}`,
+      );
       edgeMap[id] = {
         id,
         shape: "line",
@@ -142,7 +156,11 @@ export function buildMermaidElements(
     const node = nodeById.get(id);
     const finalPos = layout.placed.get(id);
     if (!node || !finalPos) continue;
-    const docId = ensureUniqueId(`${idPrefix}node_${node.id}`, existingNodeIds);
+    const docId = createUniqueHashId(
+      buildMermaidEntityPrefix(idPrefix, "node"),
+      existingNodeIds,
+      node.id,
+    );
     idMap.set(node.id, docId);
     const pos = animateIn ? (layout.initialPlaced.get(node.id) ?? finalPos) : finalPos;
     nodeMap[docId] = buildShapeNode(docId, pos, node.text, node.shape, node.radius);
@@ -156,7 +174,11 @@ export function buildMermaidElements(
     const fromId = idMap.get(edge.from);
     const toId = idMap.get(edge.to);
     if (!fromId || !toId) return;
-    const id = ensureUniqueId(`${idPrefix}edge_${index}`, existingEdgeIds);
+    const id = createUniqueHashId(
+      buildMermaidEntityPrefix(idPrefix, "edge"),
+      existingEdgeIds,
+      `${edge.from}:${edge.to}:${edge.label ?? ""}:${index}`,
+    );
     edgeMap[id] = {
       id,
       shape: "line",

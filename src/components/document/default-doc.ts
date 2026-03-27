@@ -1,17 +1,12 @@
 import type { DocEdge, DocNode, DocumentModel } from "@/components/document/model";
-
-function newId(prefix: string) {
-  const random =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random()}`;
-  return `${prefix}_${String(random).replaceAll("-", "")}`;
-}
+import { createUniqueHashId } from "@/lib/hash-id";
 
 export function createDefaultDocument(title = "ドキュメント"): DocumentModel {
-  const rectId = newId("node");
-  const textId = newId("node");
-  const ellipseId = newId("node");
+  const nodeIds = new Set<string>();
+  const edgeIds = new Set<string>();
+  const rectId = createUniqueHashId("node", nodeIds);
+  const textId = createUniqueHashId("node", nodeIds);
+  const ellipseId = createUniqueHashId("node", nodeIds);
 
   const nodes: Record<string, DocNode> = {
     [rectId]: {
@@ -61,7 +56,7 @@ export function createDefaultDocument(title = "ドキュメント"): DocumentMod
     },
   };
 
-  const edgeId = newId("edge");
+  const edgeId = createUniqueHashId("edge", edgeIds);
   const edges: Record<string, DocEdge> = {
     [edgeId]: {
       id: edgeId,

@@ -300,7 +300,7 @@ export function useCanvasInteractions({
 
       if (tool.kind === "add") {
         const point = toDocPoint(e, viewportEl, camera);
-        const id = newId("node");
+        const id = newId("node", new Set(Object.keys(doc.nodes)));
 
         const nodeDef = nodeRegistry.get(tool.nodeType);
         if (!nodeDef) {
@@ -390,7 +390,7 @@ export function useCanvasInteractions({
         }
 
         if (tool.fromId && tool.fromId !== nodeId) {
-          const edgeId = newId("edge");
+          const edgeId = newId("edge", new Set(Object.keys(doc.edges)));
           const edge: DocEdge = {
             id: edgeId,
             shape: tool.edge.shape,

@@ -118,7 +118,7 @@ export function useDocumentIO({
     const built = buildMermaidElements(source, {
       existingNodeIds: new Set(Object.keys(doc.nodes)),
       existingEdgeIds: new Set(Object.keys(doc.edges)),
-      idPrefix: "mmd_",
+      idPrefix: "",
       animateIn: true,
     });
     const result = centerMermaidBuildResultOnCamera(built, camera, viewportSize);

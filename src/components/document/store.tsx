@@ -4,6 +4,7 @@ import * as React from "react";
 import type { DocumentModel } from "@/components/document/model";
 import { createDefaultDocument } from "@/components/document/default-doc";
 import { createAtlasBlob, decodeAtlasBlob } from "@/components/document/atlas-binary";
+import { createUniqueHashId } from "@/lib/hash-id";
 
 export type StoredDoc = {
   id: string;
@@ -51,14 +52,6 @@ const ACTIVE_ID_META_KEY = "activeId";
 
 const DocumentStoreContext = React.createContext<DocumentStoreContextValue | null>(null);
 
-function newId(prefix: string) {
-  const random =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random()}`;
-  return `${prefix}_${String(random).replaceAll("-", "")}`;
-}
-
 function requestToPromise<T>(request: IDBRequest<T>) {
   return new Promise<T>((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -101,7 +94,7 @@ function openDocumentDB() {
 }
 
 function buildInitialState(): DocumentStoreState {
-  const firstId = newId("doc");
+  const firstId = createUniqueHashId("doc", new Set<string>());
   const firstDoc = createDefaultDocument("ドキュメント 1");
   return {
     version: 1,
@@ -262,7 +255,7 @@ export function DocumentStoreProvider({ children }: { children: React.ReactNode 
     setState((prev) => {
       const nextIndex = prev.docs.length + 1;
       const docTitle = title?.trim() ? title.trim() : `ドキュメント ${nextIndex}`;
-      const id = newId("doc");
+      const id = createUniqueHashId("doc", new Set(prev.docs.map((storedDoc) => storedDoc.id)));
       const doc = createDefaultDocument(docTitle);
       const next: StoredDoc = {
         id,
@@ -302,7 +295,7 @@ export function DocumentStoreProvider({ children }: { children: React.ReactNode 
     setState((prev) => {
       const remaining = prev.docs.filter((d) => d.id !== id);
       if (!remaining.length) {
-        const nextId = newId("doc");
+        const nextId = createUniqueHashId("doc", new Set<string>());
         const newDoc = createDefaultDocument("ドキュメント 1");
         return {
           ...prev,

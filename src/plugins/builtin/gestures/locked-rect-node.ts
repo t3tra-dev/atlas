@@ -1,6 +1,7 @@
 import { GestureRegister } from "@/components/document/sdk";
 import type { GestureFrame, GestureLandmark, GestureRunContext } from "@/components/document/sdk";
 import type { DocNode } from "@/components/document/model";
+import { createUniqueHashId } from "@/lib/hash-id";
 import { publishLockedRectPreview } from "./locked-rect-preview-bus";
 
 type Point = {
@@ -16,14 +17,6 @@ type DynamicPoints = {
   pA: Point;
   pB: Point;
 };
-
-function newId(prefix: string) {
-  const random =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random()}`;
-  return `${prefix}_${String(random).replaceAll("-", "")}`;
-}
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -230,7 +223,7 @@ export class LockedRectNodeGestureRegister extends GestureRegister {
     const worldH = clamp(height / camera.scale, 60, 3200);
     const worldX = centerWorldX - worldW / 2;
     const worldY = centerWorldY - worldH / 2;
-    const nodeId = newId("node");
+    const nodeId = createUniqueHashId("node", new Set(Object.keys(ctx.sdk.doc.get().nodes)));
     const nextNode = createRectShapeNode(nodeId, worldX, worldY, worldW, worldH);
 
     ctx.sdk.doc.update((doc) => ({

@@ -1,5 +1,6 @@
 import { ATLAS_FILE_EXTENSION, ATLAS_MIME_TYPE } from "@/components/document/atlas-binary";
 import type { Camera, DocEdge, DocNode, EdgeShape } from "@/components/document/model";
+import { createHashId, createUniqueHashId } from "@/lib/hash-id";
 import type { MermaidBuildResult } from "@/plugins/builtin/mermaid";
 
 export function isTextInputTarget(target: EventTarget | null) {
@@ -56,12 +57,11 @@ export function isMacPlatform() {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 }
 
-export function newId(prefix: string) {
-  const random =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random()}`;
-  return `${prefix}_${String(random).replaceAll("-", "")}`;
+export function newId(prefix: string, existing?: Set<string>) {
+  if (existing) {
+    return createUniqueHashId(prefix, existing);
+  }
+  return createHashId(prefix);
 }
 
 export function clamp(n: number, min: number, max: number) {
