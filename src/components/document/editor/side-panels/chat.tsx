@@ -21,13 +21,7 @@ import {
   type LLMProvider,
 } from "@/lib/llm-config";
 import { cn } from "@/lib/utils";
-import {
-  ChevronLeftIcon,
-  ListIcon,
-  MessageSquareIcon,
-  PlusIcon,
-  Trash2Icon,
-} from "lucide-react";
+import { ChevronLeftIcon, ListIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import type { ChatSidePanelProps } from "./types";
 
 type ChatMessage = {
@@ -92,7 +86,9 @@ function sanitizeMessages(value: unknown) {
 }
 
 function summarizeThread(messages: Array<ChatMessage>) {
-  const firstUserMessage = messages.find((message) => message.role === "user" && message.content.trim());
+  const firstUserMessage = messages.find(
+    (message) => message.role === "user" && message.content.trim(),
+  );
   if (!firstUserMessage) return EMPTY_THREAD_TITLE;
 
   const normalized = firstUserMessage.content.replace(/\s+/g, " ").trim();
@@ -116,8 +112,12 @@ function normalizeThread(raw: unknown, index: number): ChatThread | null {
   const rawThread = raw as Partial<ChatThread>;
   const messages = sanitizeMessages(rawThread.messages);
   const fallbackTitle = summarizeThread(messages);
-  const title = typeof rawThread.title === "string" && rawThread.title.trim() ? rawThread.title.trim() : fallbackTitle;
-  const createdAt = typeof rawThread.createdAt === "number" ? rawThread.createdAt : Date.now() - index;
+  const title =
+    typeof rawThread.title === "string" && rawThread.title.trim()
+      ? rawThread.title.trim()
+      : fallbackTitle;
+  const createdAt =
+    typeof rawThread.createdAt === "number" ? rawThread.createdAt : Date.now() - index;
   const updatedAt = typeof rawThread.updatedAt === "number" ? rawThread.updatedAt : createdAt;
 
   return {
@@ -169,7 +169,8 @@ function normalizeChatHistory(value: unknown): ChatHistoryState {
   }
 
   const activeThreadId =
-    typeof rawState.activeThreadId === "string" && threads.some((thread) => thread.id === rawState.activeThreadId)
+    typeof rawState.activeThreadId === "string" &&
+    threads.some((thread) => thread.id === rawState.activeThreadId)
       ? rawState.activeThreadId
       : threads[0].id;
 
@@ -195,7 +196,11 @@ function loadStoredChatHistory() {
   }
 }
 
-function upsertThread(state: ChatHistoryState, thread: ChatThread, activeThreadId = thread.id): ChatHistoryState {
+function upsertThread(
+  state: ChatHistoryState,
+  thread: ChatThread,
+  activeThreadId = thread.id,
+): ChatHistoryState {
   const remaining = state.threads.filter((entry) => entry.id !== thread.id);
   return {
     version: 1,
@@ -335,7 +340,9 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
   const [draftConfig, setDraftConfig] = React.useState<EditableLlmConfig>(() =>
     createEditableLlmConfig(loadSavedLlmConfig()),
   );
-  const [chatHistory, setChatHistory] = React.useState<ChatHistoryState>(() => loadStoredChatHistory());
+  const [chatHistory, setChatHistory] = React.useState<ChatHistoryState>(() =>
+    loadStoredChatHistory(),
+  );
   const [panelView, setPanelView] = React.useState<ChatPanelView>("threads");
   const [draft, setDraft] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
@@ -345,7 +352,9 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
   );
   const [threadPendingDelete, setThreadPendingDelete] = React.useState<ChatThread | null>(null);
   const activeThread = React.useMemo(
-    () => chatHistory.threads.find((thread) => thread.id === chatHistory.activeThreadId) ?? chatHistory.threads[0],
+    () =>
+      chatHistory.threads.find((thread) => thread.id === chatHistory.activeThreadId) ??
+      chatHistory.threads[0],
     [chatHistory],
   );
   const messages = React.useMemo(() => activeThread?.messages ?? [], [activeThread]);
@@ -397,7 +406,9 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
             ...(current.threads.find((thread) => thread.id === threadId) ?? createEmptyThread()),
             id: threadId,
             updatedAt: Date.now(),
-            messages: (current.threads.find((thread) => thread.id === threadId)?.messages ?? []).map((message) =>
+            messages: (
+              current.threads.find((thread) => thread.id === threadId)?.messages ?? []
+            ).map((message) =>
               message.id === assistantMessageId
                 ? { ...message, content: `${message.content}${delta}` }
                 : message,
@@ -475,7 +486,8 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
 
         return {
           version: 1,
-          activeThreadId: current.activeThreadId === threadId ? remaining[0].id : current.activeThreadId,
+          activeThreadId:
+            current.activeThreadId === threadId ? remaining[0].id : current.activeThreadId,
           threads: remaining.sort((left, right) => right.updatedAt - left.updatedAt),
         };
       });
@@ -596,9 +608,9 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
               ...(current.threads.find((thread) => thread.id === threadId) ?? createEmptyThread()),
               id: threadId,
               updatedAt: Date.now(),
-              messages: (current.threads.find((thread) => thread.id === threadId)?.messages ?? []).filter(
-                (message) => message.id !== assistantMessageId,
-              ),
+              messages: (
+                current.threads.find((thread) => thread.id === threadId)?.messages ?? []
+              ).filter((message) => message.id !== assistantMessageId),
             },
             current.activeThreadId,
           ),
@@ -618,9 +630,9 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
             ...(current.threads.find((thread) => thread.id === threadId) ?? createEmptyThread()),
             id: threadId,
             updatedAt: Date.now(),
-            messages: (current.threads.find((thread) => thread.id === threadId)?.messages ?? []).filter(
-              (message) => message.content.trim() || message.role === "user",
-            ),
+            messages: (
+              current.threads.find((thread) => thread.id === threadId)?.messages ?? []
+            ).filter((message) => message.content.trim() || message.role === "user"),
           },
           current.activeThreadId,
         ),
@@ -693,7 +705,7 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
             </Button>
           ) : null}
           <span className="truncate">
-            {panelView === "threads" ? "Threads" : activeThread?.title ?? "LLM Integration"}
+            {panelView === "threads" ? "Threads" : (activeThread?.title ?? "LLM Integration")}
           </span>
         </div>
 
@@ -745,7 +757,9 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
                       onClick={() => selectThread(thread.id)}
                       disabled={isSubmitting}
                     >
-                      <div className="truncate pr-1 text-sm font-medium leading-5">{thread.title}</div>
+                      <div className="truncate pr-1 text-sm font-medium leading-5">
+                        {thread.title}
+                      </div>
                       <div className="mt-0.5 truncate pr-1 text-xs leading-4 text-muted-foreground">
                         {formatThreadPreview(thread)}
                       </div>
@@ -783,7 +797,9 @@ export function ChatSidePanel({ selectedNode, isActive }: ChatSidePanelProps) {
                       <>
                         {message.content}
                         {message.id === activeAssistantMessageId ? (
-                          <span className="ml-0.5 inline-block animate-pulse align-baseline">|</span>
+                          <span className="ml-0.5 inline-block animate-pulse align-baseline">
+                            |
+                          </span>
                         ) : null}
                       </>
                     ) : null}
