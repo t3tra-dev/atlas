@@ -55,7 +55,7 @@ function sanitizeMessages(messages: ChatRequestBody["messages"]) {
   );
 }
 
-function sanitizeLlmMessages(messages: LLMTurnRequest["messages"]): Array<LLMMessage> {
+function sanitizeLLMMessages(messages: LLMTurnRequest["messages"]): Array<LLMMessage> {
   const sanitized: Array<LLMMessage> = [];
 
   for (const message of messages ?? []) {
@@ -131,7 +131,7 @@ function sanitizeLlmMessages(messages: LLMTurnRequest["messages"]): Array<LLMMes
   return sanitized;
 }
 
-function sanitizeLlmTools(tools: LLMTurnRequest["tools"]): Array<LLMToolDefinition> {
+function sanitizeLLMTools(tools: LLMTurnRequest["tools"]): Array<LLMToolDefinition> {
   return (tools ?? []).flatMap((tool) => {
     if (
       !isRecord(tool) ||
@@ -533,8 +533,8 @@ app.post("/api/llm/turn", async (c) => {
   const model = body.model?.trim();
   const token = body.token?.trim();
   const systemPrompt = body.systemPrompt?.trim();
-  const messages = sanitizeLlmMessages(body.messages);
-  const tools = sanitizeLlmTools(body.tools);
+  const messages = sanitizeLLMMessages(body.messages);
+  const tools = sanitizeLLMTools(body.tools);
 
   if (!model || !token || !messages.length) {
     return c.json({ error: "Provider, model, token, and messages are required." }, 400);

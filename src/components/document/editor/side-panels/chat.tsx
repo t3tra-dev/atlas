@@ -21,7 +21,7 @@ import {
   saveLLMConfig,
   type LLMProvider,
 } from "@/lib/llm-config";
-import { runLlmSession, type LocalLlmTool } from "@/lib/llm-session";
+import { runLLMSession, type LocalLLMTool } from "@/lib/llm-session";
 import { cn } from "@/lib/utils";
 import type { LLMMessage } from "@/shared/llm";
 import {
@@ -335,7 +335,7 @@ export function ChatSidePanel({
     [chatHistory],
   );
   const messages = React.useMemo(() => activeThread?.messages ?? [], [activeThread]);
-  const llmTools = React.useMemo<Array<LocalLlmTool>>(
+  const llmTools = React.useMemo<Array<LocalLLMTool>>(
     () => [
       {
         name: "get_current_document_state",
@@ -516,7 +516,7 @@ export function ChatSidePanel({
             },
       );
 
-      const result = await runLlmSession({
+      const result = await runLLMSession({
         provider: savedConfig.provider,
         model: savedConfig.model,
         token: savedConfig.token,

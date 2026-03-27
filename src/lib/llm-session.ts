@@ -9,7 +9,7 @@ import type {
 
 type ToolExecutor = (args: unknown) => Promise<string> | string;
 
-export type LocalLlmTool = LLMToolDefinition & {
+export type LocalLLMTool = LLMToolDefinition & {
   execute: ToolExecutor;
 };
 
@@ -30,7 +30,7 @@ function parseToolArguments(toolCall: LLMToolCall) {
   }
 }
 
-async function requestLlmTurn(body: LLMTurnRequest): Promise<LLMTurnResponse> {
+async function requestLLMTurn(body: LLMTurnRequest): Promise<LLMTurnResponse> {
   const response = await fetch("/api/llm/turn", {
     method: "POST",
     headers: {
@@ -48,7 +48,7 @@ async function requestLlmTurn(body: LLMTurnRequest): Promise<LLMTurnResponse> {
   return (await response.json()) as LLMTurnResponse;
 }
 
-export async function runLlmSession({
+export async function runLLMSession({
   provider,
   model,
   token,
@@ -62,7 +62,7 @@ export async function runLlmSession({
   token: string;
   systemPrompt?: string;
   messages: Array<LLMMessage>;
-  tools?: Array<LocalLlmTool>;
+  tools?: Array<LocalLLMTool>;
   maxTurns?: number;
 }): Promise<{ assistantMessage: LLMAssistantTextMessage; transcript: Array<LLMMessage> }> {
   const availableTools = tools ?? [];
@@ -70,7 +70,7 @@ export async function runLlmSession({
   let transcript = [...messages];
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
-    const response = await requestLlmTurn({
+    const response = await requestLLMTurn({
       provider,
       model,
       token,

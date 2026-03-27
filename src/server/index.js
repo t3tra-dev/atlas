@@ -17,7 +17,7 @@ function sanitizeMessages(messages) {
         typeof message.content === "string" &&
         !!message.content.trim());
 }
-function sanitizeLlmMessages(messages) {
+function sanitizeLLMMessages(messages) {
     const sanitized = [];
     for (const message of messages ?? []) {
         if (!isRecord(message) || typeof message.role !== "string")
@@ -75,7 +75,7 @@ function sanitizeLlmMessages(messages) {
     }
     return sanitized;
 }
-function sanitizeLlmTools(tools) {
+function sanitizeLLMTools(tools) {
     return (tools ?? []).flatMap((tool) => {
         if (!isRecord(tool) ||
             typeof tool.name !== "string" ||
@@ -387,8 +387,8 @@ app.post("/api/llm/turn", async (c) => {
     const model = body.model?.trim();
     const token = body.token?.trim();
     const systemPrompt = body.systemPrompt?.trim();
-    const messages = sanitizeLlmMessages(body.messages);
-    const tools = sanitizeLlmTools(body.tools);
+    const messages = sanitizeLLMMessages(body.messages);
+    const tools = sanitizeLLMTools(body.tools);
     if (!model || !token || !messages.length) {
         return c.json({ error: "Provider, model, token, and messages are required." }, 400);
     }
