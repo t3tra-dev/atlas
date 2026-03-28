@@ -1,4 +1,4 @@
-import type { DocEdge, DocNode, DocumentModel } from "@/components/document/model";
+import type { DocEdge, DocNode, DocumentModel, EdgeShape } from "@/components/document/model";
 import { createUniqueHashId } from "@/lib/hash-id";
 import { layoutFlowchart } from "@/plugins/builtin/mermaid/layout";
 import { MERMAID_LAYOUT_ANIMATION_MS, estimateNodeSize } from "@/plugins/builtin/mermaid/shared";
@@ -9,7 +9,7 @@ import type {
   MermaidBuildResult,
   MermaidDirection,
 } from "@/plugins/builtin/mermaid/types";
-import { clamp, computeBoundsFromNodes, getNodeCenter } from "./shared";
+import { clamp, computeBoundsFromNodes, getNodeCenter, normalizeHexColor } from "./shared";
 
 export type SupportedShape = FlowchartShape;
 
@@ -24,6 +24,20 @@ export type DerivedShapeNodeInput = {
   shape: SupportedShape;
   text: string;
   edgeLabel?: string;
+};
+
+export type NodeEditChanges = {
+  text?: string;
+  shape?: SupportedShape;
+  color?: string;
+};
+
+export type EdgeArrowEdit = "none" | "forward" | "reverse" | "both";
+
+export type EdgeEditChanges = {
+  color?: string;
+  shape?: EdgeShape;
+  arrow?: EdgeArrowEdit;
 };
 
 export type NodeAnimationPlan = {
@@ -44,6 +58,36 @@ const DEFAULT_EDGE_COLOR = "#5a75bc";
 const DEFAULT_SHAPE_FILL = "rgba(99, 102, 241, 0.08)";
 const DEFAULT_SHAPE_STROKE = "rgba(99, 102, 241, 0.6)";
 const CANVAS_PADDING = 200;
+
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = hex.replace("#", "");
+  const expanded =
+    normalized.length === 3
+      ? normalized
+          .split("")
+          .map((value) => `${value}${value}`)
+          .join("")
+      : normalized;
+  const r = Number.parseInt(expanded.slice(0, 2), 16);
+  const g = Number.parseInt(expanded.slice(2, 4), 16);
+  const b = Number.parseInt(expanded.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function buildShapeColorPatch(color: string) {
+  const normalizedHex = normalizeHexColor(color);
+  if (normalizedHex) {
+    return {
+      fill: hexToRgba(normalizedHex, 0.12),
+      stroke: hexToRgba(normalizedHex, 0.72),
+    };
+  }
+
+  return {
+    fill: color,
+    stroke: color,
+  };
+}
 
 function buildShapeNode(
   id: string,
@@ -465,5 +509,181 @@ export function deleteNodesById(doc: DocumentModel, nodeIds: string[]) {
     removedNodeIds,
     removedEdgeIds,
     missingNodeIds,
+  };
+}
+
+export function editNodesById(doc: DocumentModel, nodeIds: string[], changes: NodeEditChanges) {
+  const uniqueNodeIds = Array.from(new Set(nodeIds));
+  const updatedNodes: Record<string, DocNode> = {};
+  const updatedNodeIds: string[] = [];
+  const missingNodeIds: string[] = [];
+  const skippedNodeIds: Array<{ id: string; reason: string }> = [];
+  let changed = false;
+
+  for (const nodeId of uniqueNodeIds) {
+    const node = doc.nodes[nodeId];
+    if (!node) {
+      missingNodeIds.push(nodeId);
+      continue;
+    }
+
+    if (node.type === "shape") {
+      const nextProps = { ...node.props };
+      let nodeChanged = false;
+
+      if (typeof changes.text === "string") {
+        nextProps.text = changes.text;
+        nodeChanged = true;
+      }
+      if (changes.shape) {
+        nextProps.shape = changes.shape;
+        nextProps.radius =
+          changes.shape === "rect" ? 8 : changes.shape === "stadium" ? 18 : undefined;
+        nodeChanged = true;
+      }
+      if (typeof changes.color === "string") {
+        Object.assign(nextProps, buildShapeColorPatch(changes.color));
+        nodeChanged = true;
+      }
+
+      if (!nodeChanged) {
+        skippedNodeIds.push({ id: nodeId, reason: "No applicable node changes were provided." });
+        continue;
+      }
+
+      updatedNodes[nodeId] = { ...node, props: nextProps };
+      updatedNodeIds.push(nodeId);
+      changed = true;
+      continue;
+    }
+
+    if (node.type === "text") {
+      const nextProps = { ...node.props };
+      let nodeChanged = false;
+
+      if (typeof changes.text === "string") {
+        nextProps.text = changes.text;
+        nodeChanged = true;
+      }
+      if (typeof changes.color === "string") {
+        nextProps.color = changes.color;
+        nodeChanged = true;
+      }
+
+      if (changes.shape) {
+        skippedNodeIds.push({ id: nodeId, reason: "Shape can only be changed on shape nodes." });
+      }
+
+      if (!nodeChanged) {
+        if (!changes.shape) {
+          skippedNodeIds.push({ id: nodeId, reason: "No applicable node changes were provided." });
+        }
+        continue;
+      }
+
+      updatedNodes[nodeId] = { ...node, props: nextProps };
+      updatedNodeIds.push(nodeId);
+      changed = true;
+      continue;
+    }
+
+    skippedNodeIds.push({
+      id: nodeId,
+      reason: `Node type '${node.type}' does not support these edits.`,
+    });
+  }
+
+  return {
+    nextDoc: changed
+      ? {
+          ...doc,
+          nodes: { ...doc.nodes, ...updatedNodes },
+        }
+      : doc,
+    updatedNodeIds,
+    updatedNodes,
+    missingNodeIds,
+    skippedNodeIds,
+  };
+}
+
+export function editEdgesById(doc: DocumentModel, edgeIds: string[], changes: EdgeEditChanges) {
+  const uniqueEdgeIds = Array.from(new Set(edgeIds));
+  const updatedEdges: Record<string, DocEdge> = {};
+  const updatedEdgeIds: string[] = [];
+  const missingEdgeIds: string[] = [];
+  const skippedEdgeIds: Array<{ id: string; reason: string }> = [];
+  let changed = false;
+
+  for (const edgeId of uniqueEdgeIds) {
+    const edge = doc.edges[edgeId];
+    if (!edge) {
+      missingEdgeIds.push(edgeId);
+      continue;
+    }
+
+    let nextEdge: DocEdge = edge;
+    let edgeChanged = false;
+
+    if (typeof changes.color === "string") {
+      nextEdge = {
+        ...nextEdge,
+        props: { ...nextEdge.props, color: changes.color },
+      };
+      edgeChanged = true;
+    }
+
+    if (changes.shape) {
+      nextEdge = {
+        ...nextEdge,
+        shape: changes.shape,
+      };
+      edgeChanged = true;
+    }
+
+    if (changes.arrow) {
+      switch (changes.arrow) {
+        case "none":
+          nextEdge = { ...nextEdge, arrow: "none" };
+          break;
+        case "forward":
+          nextEdge = { ...nextEdge, arrow: "end" };
+          break;
+        case "reverse":
+          nextEdge = {
+            ...nextEdge,
+            from: nextEdge.to,
+            to: nextEdge.from,
+            arrow: "end",
+          };
+          break;
+        case "both":
+          nextEdge = { ...nextEdge, arrow: "both" };
+          break;
+      }
+      edgeChanged = true;
+    }
+
+    if (!edgeChanged) {
+      skippedEdgeIds.push({ id: edgeId, reason: "No applicable edge changes were provided." });
+      continue;
+    }
+
+    updatedEdges[edgeId] = nextEdge;
+    updatedEdgeIds.push(edgeId);
+    changed = true;
+  }
+
+  return {
+    nextDoc: changed
+      ? {
+          ...doc,
+          edges: { ...doc.edges, ...updatedEdges },
+        }
+      : doc,
+    updatedEdgeIds,
+    updatedEdges,
+    missingEdgeIds,
+    skippedEdgeIds,
   };
 }

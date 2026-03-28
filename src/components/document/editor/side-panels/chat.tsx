@@ -32,12 +32,18 @@ import {
   createDerivedNodesFromSource,
   createPositionedShapeNodes,
   deleteNodesById,
+  editEdgesById,
+  editNodesById,
   runNodeAnimation,
+  type EdgeArrowEdit,
+  type EdgeEditChanges,
   type DerivedShapeNodeInput,
+  type NodeEditChanges,
   type PositionedShapeNodeInput,
   type SupportedShape,
 } from "@/components/document/editor/document-editing";
 import type { MermaidDirection } from "@/plugins/builtin/mermaid/types";
+import type { EdgeShape } from "@/components/document/model";
 import {
   BotIcon,
   ChevronLeftIcon,
@@ -151,15 +157,25 @@ const MERMAID_DIRECTIONS = [
   "RL",
   "BT",
 ] as const satisfies ReadonlyArray<MermaidDirection>;
+const EDGE_SHAPES = ["line", "curve"] as const satisfies ReadonlyArray<EdgeShape>;
+const EDGE_ARROW_EDITS = [
+  "none",
+  "forward",
+  "reverse",
+  "both",
+] as const satisfies ReadonlyArray<EdgeArrowEdit>;
 
 const ATLAS_CHAT_SYSTEM_PROMPT = [
   "You are an AI assistant named atlas, integrated into a visual document editor.",
   "Help the user understand and work with the currently open atlas document.",
   "If the user asks about the current document, canvas, nodes, edges, layout, positions, relationships, camera, zoom, or selection, call get_current_document_state before answering.",
   "If the user asks to edit the current document by creating, deriving, or deleting nodes, use the document editing tools instead of just explaining the changes.",
+  "If the user asks to edit existing nodes or existing edges, use the dedicated edit tools and only include the fields that should actually change.",
   "When creating nodes directly, use create_document_nodes and specify the world coordinates, shape, and text for each node.",
   "When expanding derived nodes from existing node IDs, use derive_document_nodes_from_node so the atlas layout engine can interpret them.",
   "When deleting, use delete_document_nodes with one or more node IDs.",
+  "When editing existing nodes, use edit_document_nodes with nodeIds and a changes object.",
+  "When editing existing edges, use edit_document_edges with edgeIds and a changes object.",
   "Base any descriptions of the current document solely on the tool results.",
   "When mentioning specific nodes, prefer the actual node IDs from the tool output and refer to them exactly as elm[node_xxxxxxxx].",
   "When mentioning specific edges, prefer the actual edge IDs from the tool output and refer to them exactly as elm[edge_xxxxxxxx].",
@@ -286,6 +302,84 @@ function parseDeleteNodeIds(args: unknown): string[] {
   });
 
   return Array.from(new Set(nodeIds));
+}
+
+function parseNodeEditArgs(args: unknown): { nodeIds: string[]; changes: NodeEditChanges } {
+  if (!isRecord(args) || !Array.isArray(args.nodeIds) || !isRecord(args.changes)) {
+    throw new Error("'nodeIds' and 'changes' are required.");
+  }
+
+  const nodeIds = args.nodeIds.map((nodeId, index) => {
+    if (typeof nodeId !== "string" || !nodeId.trim()) {
+      throw new Error(`nodeIds[${index}] must be a non-empty string.`);
+    }
+    return nodeId.trim();
+  });
+
+  if (!nodeIds.length) {
+    throw new Error("'nodeIds' must be a non-empty array.");
+  }
+
+  const changes: NodeEditChanges = {};
+  if (typeof args.changes.text === "string") {
+    changes.text = args.changes.text;
+  }
+  if (isSupportedShape(args.changes.shape)) {
+    changes.shape = args.changes.shape;
+  } else if (typeof args.changes.shape !== "undefined") {
+    throw new Error(`changes.shape must be one of ${DOCUMENT_SHAPES.join(", ")}.`);
+  }
+  if (typeof args.changes.color === "string" && args.changes.color.trim()) {
+    changes.color = args.changes.color.trim();
+  } else if (typeof args.changes.color !== "undefined") {
+    throw new Error("changes.color must be a non-empty string.");
+  }
+
+  return { nodeIds: Array.from(new Set(nodeIds)), changes };
+}
+
+function isEdgeShape(value: unknown): value is EdgeShape {
+  return typeof value === "string" && EDGE_SHAPES.includes(value as EdgeShape);
+}
+
+function isEdgeArrowEdit(value: unknown): value is EdgeArrowEdit {
+  return typeof value === "string" && EDGE_ARROW_EDITS.includes(value as EdgeArrowEdit);
+}
+
+function parseEdgeEditArgs(args: unknown): { edgeIds: string[]; changes: EdgeEditChanges } {
+  if (!isRecord(args) || !Array.isArray(args.edgeIds) || !isRecord(args.changes)) {
+    throw new Error("'edgeIds' and 'changes' are required.");
+  }
+
+  const edgeIds = args.edgeIds.map((edgeId, index) => {
+    if (typeof edgeId !== "string" || !edgeId.trim()) {
+      throw new Error(`edgeIds[${index}] must be a non-empty string.`);
+    }
+    return edgeId.trim();
+  });
+
+  if (!edgeIds.length) {
+    throw new Error("'edgeIds' must be a non-empty array.");
+  }
+
+  const changes: EdgeEditChanges = {};
+  if (typeof args.changes.color === "string" && args.changes.color.trim()) {
+    changes.color = args.changes.color.trim();
+  } else if (typeof args.changes.color !== "undefined") {
+    throw new Error("changes.color must be a non-empty string.");
+  }
+  if (isEdgeShape(args.changes.shape)) {
+    changes.shape = args.changes.shape;
+  } else if (typeof args.changes.shape !== "undefined") {
+    throw new Error(`changes.shape must be one of ${EDGE_SHAPES.join(", ")}.`);
+  }
+  if (isEdgeArrowEdit(args.changes.arrow)) {
+    changes.arrow = args.changes.arrow;
+  } else if (typeof args.changes.arrow !== "undefined") {
+    throw new Error(`changes.arrow must be one of ${EDGE_ARROW_EDITS.join(", ")}.`);
+  }
+
+  return { edgeIds: Array.from(new Set(edgeIds)), changes };
 }
 
 function sanitizeToolCalls(value: unknown): Array<LLMToolCall> {
@@ -1352,6 +1446,94 @@ export function ChatSidePanel({
               removedNodeIds: result.removedNodeIds,
               removedEdgeIds: result.removedEdgeIds,
               missingNodeIds: result.missingNodeIds,
+            },
+            null,
+            2,
+          );
+        },
+      },
+      {
+        name: "edit_document_nodes",
+        description:
+          "Edit one or more existing nodes by id. Provide nodeIds and a changes object. Omitted keys are left unchanged.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeIds: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string" },
+            },
+            changes: {
+              type: "object",
+              properties: {
+                text: { type: "string" },
+                color: { type: "string" },
+                shape: { type: "string", enum: [...DOCUMENT_SHAPES] },
+              },
+              additionalProperties: false,
+            },
+          },
+          required: ["nodeIds", "changes"],
+          additionalProperties: false,
+        },
+        execute: async (args) => {
+          const parsed = parseNodeEditArgs(args);
+          const result = editNodesById(docRef.current, parsed.nodeIds, parsed.changes);
+          docRef.current = result.nextDoc;
+          setDoc(result.nextDoc);
+
+          return JSON.stringify(
+            {
+              ok: true,
+              updatedNodeIds: result.updatedNodeIds,
+              missingNodeIds: result.missingNodeIds,
+              skippedNodeIds: result.skippedNodeIds,
+              changes: parsed.changes,
+            },
+            null,
+            2,
+          );
+        },
+      },
+      {
+        name: "edit_document_edges",
+        description:
+          "Edit one or more existing edges by id. Provide edgeIds and a changes object. Omitted keys are left unchanged.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            edgeIds: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string" },
+            },
+            changes: {
+              type: "object",
+              properties: {
+                color: { type: "string" },
+                shape: { type: "string", enum: [...EDGE_SHAPES] },
+                arrow: { type: "string", enum: [...EDGE_ARROW_EDITS] },
+              },
+              additionalProperties: false,
+            },
+          },
+          required: ["edgeIds", "changes"],
+          additionalProperties: false,
+        },
+        execute: async (args) => {
+          const parsed = parseEdgeEditArgs(args);
+          const result = editEdgesById(docRef.current, parsed.edgeIds, parsed.changes);
+          docRef.current = result.nextDoc;
+          setDoc(result.nextDoc);
+
+          return JSON.stringify(
+            {
+              ok: true,
+              updatedEdgeIds: result.updatedEdgeIds,
+              missingEdgeIds: result.missingEdgeIds,
+              skippedEdgeIds: result.skippedEdgeIds,
+              changes: parsed.changes,
             },
             null,
             2,
