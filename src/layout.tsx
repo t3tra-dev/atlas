@@ -109,7 +109,6 @@ export default function Layout({ children }: { children?: ReactNode }) {
       setMicPermission(state);
       if (!micPermissionInitRef.current && state === "granted") {
         micPermissionInitRef.current = true;
-        setMicEnabled(true);
       }
     };
 

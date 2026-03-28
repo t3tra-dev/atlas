@@ -1330,6 +1330,7 @@ export function ChatSidePanel({
   );
   const messages = React.useMemo(() => activeThread?.messages ?? [], [activeThread]);
   const displayItems = React.useMemo(() => groupMessagesForDisplay(messages), [messages]);
+  const isChatInputActive = isActive && panelView === "conversation";
 
   React.useEffect(() => {
     docRef.current = doc;
@@ -1443,6 +1444,7 @@ export function ChatSidePanel({
   }, []);
 
   const startTranscription = React.useCallback(async () => {
+    if (!isChatInputActive) return;
     if (isTranscribing) return;
     if (typeof navigator === "undefined") return;
     if (!micEnabled) {
@@ -1557,7 +1559,14 @@ export function ChatSidePanel({
       );
       stopTranscription({ reason: "manual" });
     }
-  }, [isTranscribing, micEnabled, replaceTranscript, sendChunkToSocket, stopTranscription]);
+  }, [
+    isChatInputActive,
+    isTranscribing,
+    micEnabled,
+    replaceTranscript,
+    sendChunkToSocket,
+    stopTranscription,
+  ]);
 
   const toggleTranscription = React.useCallback(() => {
     if (isTranscribing) {
@@ -1576,6 +1585,7 @@ export function ChatSidePanel({
   React.useEffect(() => {
     const unsubscribe = subscribeVoiceInputToggle((event) => {
       if (event.source !== "gesture") return;
+      if (!isChatInputActive) return;
       if (!isTranscriptionSupported || !micEnabled) return;
       if (isTranscribing) {
         stopTranscription({ reason: "gesture" });
@@ -1587,13 +1597,20 @@ export function ChatSidePanel({
     return () => {
       unsubscribe();
     };
-  }, [isTranscribing, isTranscriptionSupported, micEnabled, startTranscription, stopTranscription]);
+  }, [
+    isChatInputActive,
+    isTranscribing,
+    isTranscriptionSupported,
+    micEnabled,
+    startTranscription,
+    stopTranscription,
+  ]);
 
   React.useEffect(() => {
-    if (!micEnabled && isTranscribing) {
+    if ((!micEnabled || !isChatInputActive) && isTranscribing) {
       stopTranscription({ reason: "manual" });
     }
-  }, [isTranscribing, micEnabled, stopTranscription]);
+  }, [isChatInputActive, isTranscribing, micEnabled, stopTranscription]);
 
   const llmTools = React.useMemo<Array<LocalLLMTool>>(
     () => [
