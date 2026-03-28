@@ -1,7 +1,40 @@
+/// <reference types="@cloudflare/workers-types" />
 import { GoogleGenAI } from "@google/genai";
 import { Hono } from "hono";
 import OpenAI from "openai";
 const app = new Hono();
+const SUPPORTED_NOVA3_LANGUAGES = new Set([
+    "en",
+    "en-US",
+    "en-AU",
+    "en-GB",
+    "en-IN",
+    "en-NZ",
+    "es",
+    "es-419",
+    "fr",
+    "fr-CA",
+    "de",
+    "de-CH",
+    "hi",
+    "ru",
+    "pt",
+    "pt-BR",
+    "pt-PT",
+    "ja",
+    "it",
+    "nl",
+    "multi",
+]);
+function normalizeNova3Language(raw) {
+    const trimmed = raw?.trim();
+    if (!trimmed)
+        return undefined;
+    if (SUPPORTED_NOVA3_LANGUAGES.has(trimmed))
+        return trimmed;
+    const primary = trimmed.split("-")[0];
+    return SUPPORTED_NOVA3_LANGUAGES.has(primary) ? primary : undefined;
+}
 function isProvider(value) {
     return value === "google" || value === "openai";
 }
@@ -473,6 +506,160 @@ app.post("/api/llm/chat", async (c) => {
             Connection: "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    });
+});
+app.post("/api/transcribe", async (c) => {
+    const request = c.req.raw;
+    if (!request.body) {
+        return c.json({ error: "Audio body is required." }, 400);
+    }
+    const url = new URL(request.url);
+    const detectLanguage = url.searchParams.get("detect_language") !== "false";
+    const language = normalizeNova3Language(url.searchParams.get("language"));
+    const contentType = request.headers.get("content-type")?.trim() || "audio/webm";
+    try {
+        const response = await c.env.AI.run("@cf/deepgram/nova-3", {
+            audio: {
+                body: request.body,
+                contentType,
+            },
+            detect_language: detectLanguage,
+            ...(language ? { language } : {}),
+            punctuate: true,
+            smart_format: true,
+        }, { returnRawResponse: false });
+        const transcript = response
+            ?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
+        return c.json({ transcript });
+    }
+    catch (error) {
+        return c.json({
+            error: error instanceof Error ? error.message : "Transcription failed.",
+        }, 500);
+    }
+});
+app.get("/api/transcribe/ws", (c) => {
+    if (c.req.header("upgrade") !== "websocket") {
+        return c.json({ error: "WebSocket upgrade required." }, 426);
+    }
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    let language;
+    let detectLanguage = true;
+    let contentType = "audio/webm";
+    let chain = Promise.resolve();
+    server.accept();
+    const sendPayload = (payload) => {
+        try {
+            server.send(JSON.stringify(payload));
+        }
+        catch {
+            // Ignore send errors during shutdown.
+        }
+    };
+    const normalizeContentType = (raw) => {
+        const trimmed = raw?.trim();
+        if (!trimmed)
+            return "audio/webm";
+        const base = trimmed.split(";")[0];
+        if (base === "audio/webm" || base === "audio/ogg" || base === "audio/mp4") {
+            return base;
+        }
+        return trimmed;
+    };
+    const enqueueTranscription = (bytes) => {
+        const safeContentType = normalizeContentType(contentType);
+        const blob = new Blob([bytes], { type: safeContentType });
+        chain = chain
+            .then(async () => {
+            const response = await c.env.AI.run("@cf/deepgram/nova-3", {
+                audio: {
+                    body: blob.stream(),
+                    contentType: safeContentType,
+                },
+                detect_language: detectLanguage,
+                ...(language ? { language } : {}),
+                punctuate: true,
+                smart_format: true,
+            }, { returnRawResponse: false });
+            const transcript = response
+                ?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
+            if (transcript) {
+                sendPayload({ transcript, isPartial: false });
+            }
+        })
+            .catch((error) => {
+            sendPayload({ error: error instanceof Error ? error.message : "Transcription failed." });
+            try {
+                server.close(1011, "Transcription failed");
+            }
+            catch {
+                // ignore
+            }
+        });
+    };
+    server.addEventListener("message", (event) => {
+        const data = event.data;
+        if (typeof data === "string") {
+            try {
+                const parsed = JSON.parse(data);
+                if (parsed.type === "config") {
+                    const normalized = normalizeNova3Language(parsed.language ?? null);
+                    if (normalized)
+                        language = normalized;
+                    if (typeof parsed.detectLanguage === "boolean") {
+                        detectLanguage = parsed.detectLanguage;
+                    }
+                    if (typeof parsed.contentType === "string" && parsed.contentType.trim()) {
+                        contentType = parsed.contentType.trim();
+                    }
+                    sendPayload({ ok: true });
+                }
+            }
+            catch (error) {
+                sendPayload({ error: error instanceof Error ? error.message : "Invalid message." });
+            }
+            return;
+        }
+        if (data instanceof ArrayBuffer) {
+            const bytes = new Uint8Array(data);
+            if (bytes.byteLength > 0)
+                enqueueTranscription(bytes);
+            return;
+        }
+        if (data instanceof Uint8Array) {
+            if (data.byteLength > 0)
+                enqueueTranscription(data);
+            return;
+        }
+        if (data instanceof Blob) {
+            void data
+                .arrayBuffer()
+                .then((buffer) => {
+                const bytes = new Uint8Array(buffer);
+                if (bytes.byteLength > 0)
+                    enqueueTranscription(bytes);
+            })
+                .catch((error) => {
+                sendPayload({
+                    error: error instanceof Error ? error.message : "Invalid audio payload.",
+                });
+            });
+            return;
+        }
+    });
+    server.addEventListener("close", () => {
+        try {
+            server.close();
+        }
+        catch {
+            // ignore
+        }
+    });
+    return new Response(null, {
+        status: 101,
+        webSocket: client,
     });
 });
 // Handle SPA fallback

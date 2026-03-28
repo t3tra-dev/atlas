@@ -52,8 +52,10 @@ import {
   ChevronLeftIcon,
   ListIcon,
   MessageSquareIcon,
+  MicIcon,
   PlusIcon,
   Settings2Icon,
+  SquareIcon,
   Trash2Icon,
   WrenchIcon,
 } from "lucide-react";
@@ -167,6 +169,8 @@ const EDGE_ARROW_EDITS = [
   "reverse",
   "both",
 ] as const satisfies ReadonlyArray<EdgeArrowEdit>;
+const AUDIO_INPUT_PREFIX = "[audio input] ";
+const CJK_CHAR_PATTERN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 
 const ATLAS_CHAT_SYSTEM_PROMPT = [
   "You are an AI assistant named atlas, integrated into a visual document editor.",
@@ -197,6 +201,7 @@ const ATLAS_CHAT_SYSTEM_PROMPT = [
   "When explaining the structure, clearly indicate nodes, edges, directions, and relative positions.",
   "Respond in the user's language.",
   "Keep your responses specific and concise.",
+  "If a user message starts with [audio input], treat it as speech-to-text and account for possible transcription variations.",
 ].join("\n");
 
 function createMessageId() {
@@ -217,6 +222,25 @@ function isSupportedShape(value: unknown): value is SupportedShape {
 
 function isMermaidDirection(value: unknown): value is MermaidDirection {
   return typeof value === "string" && MERMAID_DIRECTIONS.includes(value as MermaidDirection);
+}
+
+function normalizeTranscriptionText(value: string, locale: string | undefined) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const isCjkLocale =
+    Boolean(locale?.toLowerCase().startsWith("ja")) ||
+    Boolean(locale?.toLowerCase().startsWith("zh")) ||
+    Boolean(locale?.toLowerCase().startsWith("ko"));
+  if (isCjkLocale) {
+    return trimmed.replace(/\s+/g, "");
+  }
+  if (CJK_CHAR_PATTERN.test(trimmed)) {
+    return trimmed.replace(
+      /([\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff])\s+([\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff])/g,
+      "$1$2",
+    );
+  }
+  return trimmed;
 }
 
 function parsePositionedNodeInputs(args: unknown): PositionedShapeNodeInput[] {
@@ -1279,6 +1303,14 @@ export function ChatSidePanel({
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
   const [threadPendingDelete, setThreadPendingDelete] = React.useState<ChatThread | null>(null);
+  const [isTranscribing, setIsTranscribing] = React.useState(false);
+  const [transcriptionError, setTranscriptionError] = React.useState<string | null>(null);
+  const [isTranscriptionSupported, setIsTranscriptionSupported] = React.useState(true);
+  const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = React.useRef<MediaStream | null>(null);
+  const transcribeSocketRef = React.useRef<WebSocket | null>(null);
+  const recordedChunksRef = React.useRef<Blob[]>([]);
+  const lastTranscriptRef = React.useRef<string | null>(null);
   const visibleChatHistory =
     chatHistoryDocId === normalizedActiveDocId ? chatHistory : normalizeChatHistory(null);
   const activeThread = React.useMemo(
@@ -1296,6 +1328,13 @@ export function ChatSidePanel({
   }, [doc]);
 
   React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const supported =
+      "MediaRecorder" in window && typeof navigator?.mediaDevices?.getUserMedia === "function";
+    setIsTranscriptionSupported(supported);
+  }, []);
+
+  React.useEffect(() => {
     selectedNodeIdRef.current = selectedNode?.id ?? null;
     selectedEdgeIdRef.current = selectedEdge?.id ?? null;
   }, [selectedEdge?.id, selectedNode?.id]);
@@ -1305,6 +1344,191 @@ export function ChatSidePanel({
       cancelNodeAnimation(toolAnimationFrameRef);
     };
   }, []);
+
+  const replaceTranscript = React.useCallback((text: string) => {
+    const normalized = normalizeTranscriptionText(
+      text,
+      typeof navigator !== "undefined" ? navigator.language : undefined,
+    );
+    if (!normalized) return;
+    const spacer = CJK_CHAR_PATTERN.test(normalized) ? "" : " ";
+    const nextSegment = `${AUDIO_INPUT_PREFIX}${normalized}`;
+
+    setDraft((current) => {
+      if (lastTranscriptRef.current) {
+        const escaped = lastTranscriptRef.current.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const pattern = new RegExp(`${escaped}$`);
+        const next = current.replace(pattern, nextSegment);
+        lastTranscriptRef.current = nextSegment;
+        return next === current ? `${current}${spacer}${nextSegment}` : next;
+      }
+
+      lastTranscriptRef.current = nextSegment;
+      return current ? `${current}${spacer}${nextSegment}` : nextSegment;
+    });
+  }, []);
+
+  const sendChunkToSocket = React.useCallback((payload: Blob) => {
+    if (!payload || payload.size === 0) return;
+    const socket = transcribeSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+    void payload
+      .arrayBuffer()
+      .then((buffer) => {
+        socket.send(buffer);
+      })
+      .catch(() => {
+        setTranscriptionError("音声データの送信に失敗しました。");
+      });
+  }, []);
+
+  const stopTranscription = React.useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+    lastTranscriptRef.current = null;
+    recordedChunksRef.current = [];
+    if (transcribeSocketRef.current) {
+      try {
+        transcribeSocketRef.current.close();
+      } catch {
+        // ignore
+      }
+    }
+    transcribeSocketRef.current = null;
+    setIsTranscribing(false);
+  }, []);
+
+  const startTranscription = React.useCallback(async () => {
+    if (isTranscribing) return;
+    if (typeof navigator === "undefined") return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setTranscriptionError("このブラウザは音声入力に対応していません。");
+      return;
+    }
+
+    try {
+      setTranscriptionError(null);
+      const wsUrl = new URL("/api/transcribe/ws", window.location.href);
+      wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(wsUrl);
+      transcribeSocketRef.current = socket;
+
+      socket.onmessage = (event) => {
+        if (typeof event.data !== "string") return;
+        try {
+          const payload = JSON.parse(event.data) as {
+            transcript?: string;
+            isPartial?: boolean;
+            error?: string;
+          };
+          if (payload.error) {
+            setTranscriptionError(payload.error);
+            stopTranscription();
+            return;
+          }
+          if (payload.transcript) {
+            replaceTranscript(payload.transcript);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      socket.onerror = () => {
+        setTranscriptionError("音声入力サーバーとの接続に失敗しました。");
+        stopTranscription();
+      };
+
+      socket.onclose = () => {
+        if (isTranscribing) {
+          setTranscriptionError("音声入力サーバーとの接続が切断されました。");
+          stopTranscription();
+        }
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      const preferredTypes = [
+        "audio/ogg;codecs=opus",
+        "audio/ogg",
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+      ];
+      const mimeType = preferredTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+      recordedChunksRef.current = [];
+
+      const sendConfig = () => {
+        if (socket.readyState !== WebSocket.OPEN) return;
+        const languageHint = typeof navigator !== "undefined" ? navigator.language : "";
+        const resolvedType = recorder.mimeType || mimeType || "audio/webm";
+        socket.send(
+          JSON.stringify({
+            type: "config",
+            language: languageHint || undefined,
+            detectLanguage: true,
+            contentType: resolvedType,
+          }),
+        );
+      };
+
+      socket.onopen = () => {
+        if (recorder.state === "recording") {
+          sendConfig();
+        }
+      };
+
+      recorder.onstart = () => {
+        sendConfig();
+      };
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+          const snapshot = new Blob(recordedChunksRef.current, {
+            type: recorder.mimeType || mimeType || "audio/webm",
+          });
+          sendChunkToSocket(snapshot);
+        }
+      };
+
+      recorder.onstop = () => {
+        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      };
+
+      recorder.start(1500);
+      setIsTranscribing(true);
+    } catch (caughtError) {
+      setTranscriptionError(
+        caughtError instanceof Error ? caughtError.message : "マイクの使用に失敗しました。",
+      );
+      stopTranscription();
+    }
+  }, [isTranscribing, replaceTranscript, sendChunkToSocket, stopTranscription]);
+
+  const toggleTranscription = React.useCallback(() => {
+    if (isTranscribing) {
+      stopTranscription();
+    } else {
+      void startTranscription();
+    }
+  }, [isTranscribing, startTranscription, stopTranscription]);
+
+  React.useEffect(() => {
+    return () => {
+      stopTranscription();
+    };
+  }, [stopTranscription]);
 
   const llmTools = React.useMemo<Array<LocalLLMTool>>(
     () => [
@@ -1677,6 +1901,12 @@ export function ChatSidePanel({
     wasActiveRef.current = isActive;
   }, [isActive]);
 
+  React.useEffect(() => {
+    if (!isActive && isTranscribing) {
+      stopTranscription();
+    }
+  }, [isActive, isTranscribing, stopTranscription]);
+
   const hasConfig = hasCompleteLLMConfig(savedConfig);
 
   const applyDraftConfig = React.useCallback(() => {
@@ -2033,7 +2263,31 @@ export function ChatSidePanel({
             placeholder="Ask Atlas AI about this canvas..."
             disabled={!hasConfig || isSubmitting}
           />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="xs"
+              variant={isTranscribing ? "default" : "outline"}
+              onClick={toggleTranscription}
+              disabled={!isTranscriptionSupported || isSubmitting}
+            >
+              {isTranscribing ? (
+                <SquareIcon className="size-3.5" />
+              ) : (
+                <MicIcon className="size-3.5" />
+              )}
+              {isTranscribing ? "録音停止" : "音声入力"}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              {isTranscribing
+                ? "音声を文字起こししています..."
+                : "マイク入力でリアルタイム文字起こしが可能です。"}
+            </span>
+          </div>
           <div className="text-xs text-muted-foreground">Enter で送信、Shift+Enter で改行</div>
+          {transcriptionError ? (
+            <div className="text-xs text-destructive">{transcriptionError}</div>
+          ) : null}
           {error ? <div className="text-xs text-destructive">{error}</div> : null}
         </div>
       ) : null}
