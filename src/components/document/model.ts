@@ -105,6 +105,7 @@ export type DragState =
       startClientY: number;
       startX: number;
       startY: number;
+      childStartPositions?: Record<string, { x: number; y: number }>;
     }
   | {
       kind: "resize";

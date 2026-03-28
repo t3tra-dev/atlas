@@ -56,6 +56,20 @@ export type ShapeNode = DocNodeBase<
   }
 >;
 
+export type ContainerNode = DocNodeBase<
+  "container",
+  {
+    title: string;
+    padding: number;
+    fill: string;
+    stroke: string;
+    strokeWidth: number;
+    radius?: number;
+    labelBackground: string;
+    labelColor: string;
+  }
+>;
+
 export type ThreeCanvasNode = DocNodeBase<
   "three-canvas",
   {
@@ -789,6 +803,146 @@ function shapeNodeDef(): NodeTypeDef {
   };
 }
 
+function containerNodeDef(): NodeTypeDef {
+  return {
+    type: "container",
+    title: "コンテナ",
+    category: "図形",
+    placement: {
+      kind: "click",
+      defaultSize: { w: 360, h: 220 },
+      minSize: { w: 180, h: 120 },
+    },
+    create: ({ id, x, y }) => ({
+      id,
+      type: "container",
+      x: x - 180,
+      y: y - 110,
+      w: 360,
+      h: 220,
+      props: {
+        title: "Container",
+        padding: 36,
+        fill: "rgba(148, 163, 184, 0.08)",
+        stroke: "rgba(100, 116, 139, 0.7)",
+        strokeWidth: 2,
+        radius: 16,
+        labelBackground: "rgba(15, 23, 42, 0.7)",
+        labelColor: "#f8fafc",
+      },
+    }),
+    render: ({ node, scale, cn }) => {
+      if (node.type !== "container") return { ariaLabel: "container" };
+      const p = node.props as ContainerNode["props"];
+      const borderWidth = Math.max(1, p.strokeWidth * scale);
+      const radius = (p.radius ?? 12) * scale;
+      const headerHeight = 26 * scale;
+
+      return {
+        ariaLabel: "container",
+        className: cn("select-none"),
+        children: (
+          <div className="relative h-full w-full">
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                border: `${borderWidth}px dashed ${p.stroke}`,
+                borderRadius: radius,
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                inset: borderWidth,
+                borderRadius: Math.max(0, radius - borderWidth),
+                background: p.fill,
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: borderWidth,
+                right: borderWidth,
+                top: borderWidth,
+                height: headerHeight,
+                background: p.labelBackground,
+                borderTopLeftRadius: Math.max(0, radius - borderWidth),
+                borderTopRightRadius: Math.max(0, radius - borderWidth),
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: borderWidth,
+                right: borderWidth,
+                top: borderWidth + headerHeight,
+                height: borderWidth,
+                background: p.stroke,
+                opacity: 0.35,
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left: 12 * scale,
+                top: borderWidth + headerHeight / 2 - 6 * scale,
+                color: p.labelColor,
+                fontSize: 12 * scale,
+                lineHeight: 1,
+                fontWeight: 600,
+                whiteSpace: "nowrap",
+                maxWidth: `calc(100% - ${24 * scale}px)`,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {p.title}
+            </div>
+          </div>
+        ),
+      };
+    },
+    inspector: ({ node, updateNode }) =>
+      node.type !== "container" ? null : (
+        <div className="space-y-3">
+          <InputGroup label="タイトル">
+            <Input
+              value={(node.props as ContainerNode["props"]).title}
+              onChange={(e) => {
+                const next = e.target.value;
+                updateNode((prev) => ({
+                  ...prev,
+                  props: {
+                    ...(prev.props as Record<string, unknown>),
+                    title: next,
+                  },
+                }));
+              }}
+            />
+          </InputGroup>
+          <InputGroup label="内側余白">
+            <Input
+              inputMode="numeric"
+              value={String(Math.round((node.props as ContainerNode["props"]).padding ?? 0))}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                if (!Number.isFinite(next)) return;
+                updateNode((prev) => ({
+                  ...prev,
+                  props: {
+                    ...(prev.props as Record<string, unknown>),
+                    padding: Math.max(0, Math.min(240, next)),
+                  },
+                }));
+              }}
+            />
+          </InputGroup>
+        </div>
+      ),
+  };
+}
+
 export function builtinNodes(): Array<NodeTypeDef> {
-  return [textNodeDef(), imageNodeDef(), threeCanvasNodeDef(), shapeNodeDef()];
+  return [textNodeDef(), imageNodeDef(), threeCanvasNodeDef(), containerNodeDef(), shapeNodeDef()];
 }

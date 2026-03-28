@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { buildDocumentSnapshot } from "@/lib/document-snapshot";
+import { buildMermaidElements } from "@/plugins/builtin/mermaid";
 import {
   createEditableLLMConfig,
   hasCompleteLLMConfig,
@@ -34,6 +35,7 @@ import {
   deleteNodesById,
   editEdgesById,
   editNodesById,
+  mergeMermaidBuildResultIntoDocument,
   runNodeAnimation,
   type EdgeArrowEdit,
   type EdgeEditChanges,
@@ -42,6 +44,7 @@ import {
   type PositionedShapeNodeInput,
   type SupportedShape,
 } from "@/components/document/editor/document-editing";
+import { centerMermaidBuildResultOnPoint } from "@/components/document/editor/shared";
 import type { MermaidDirection } from "@/plugins/builtin/mermaid/types";
 import type { EdgeShape } from "@/components/document/model";
 import {
@@ -170,6 +173,7 @@ const ATLAS_CHAT_SYSTEM_PROMPT = [
   "Help the user understand and work with the currently open atlas document.",
   "If the user asks about the current document, canvas, nodes, edges, layout, positions, relationships, camera, zoom, or selection, call get_current_document_state before answering.",
   "If the user asks to edit the current document by creating, deriving, or deleting nodes, use the document editing tools instead of just explaining the changes.",
+  "If the user provides Mermaid text and a target center point, or asks to generate a whole graph from Mermaid text, call create_mermaid_graph_at_center.",
   "If the user asks to edit existing nodes or existing edges, use the dedicated edit tools and only include the fields that should actually change.",
   "When creating nodes directly, use create_document_nodes and specify the world coordinates, shape, and text for each node.",
   "When expanding derived nodes from existing node IDs, use derive_document_nodes_from_node so the atlas layout engine can interpret them.",
@@ -380,6 +384,38 @@ function parseEdgeEditArgs(args: unknown): { edgeIds: string[]; changes: EdgeEdi
   }
 
   return { edgeIds: Array.from(new Set(edgeIds)), changes };
+}
+
+function parseMermaidGraphArgs(args: unknown): {
+  mermaidText: string;
+  centerX: number;
+  centerY: number;
+} {
+  if (!isRecord(args)) {
+    throw new Error("Arguments must be an object.");
+  }
+
+  if (typeof args.mermaidText !== "string" || !args.mermaidText.trim()) {
+    throw new Error("'mermaidText' must be a non-empty string.");
+  }
+
+  if (!isRecord(args.center)) {
+    throw new Error("'center' must be an object with x and y.");
+  }
+
+  if (typeof args.center.x !== "number" || !Number.isFinite(args.center.x)) {
+    throw new Error("center.x must be a finite number.");
+  }
+
+  if (typeof args.center.y !== "number" || !Number.isFinite(args.center.y)) {
+    throw new Error("center.y must be a finite number.");
+  }
+
+  return {
+    mermaidText: args.mermaidText.trim(),
+    centerX: args.center.x,
+    centerY: args.center.y,
+  };
 }
 
 function sanitizeToolCalls(value: unknown): Array<LLMToolCall> {
@@ -1411,6 +1447,72 @@ export function ChatSidePanel({
                   targetY: result.animation.targetPositions[nodeId]?.y ?? node.y,
                 };
               }),
+            },
+            null,
+            2,
+          );
+        },
+      },
+      {
+        name: "create_mermaid_graph_at_center",
+        description:
+          "Build a full Mermaid graph from source text and place it so its bounds are centered on the given world coordinate. Always animates into place.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            mermaidText: { type: "string" },
+            center: {
+              type: "object",
+              properties: {
+                x: { type: "number" },
+                y: { type: "number" },
+              },
+              required: ["x", "y"],
+              additionalProperties: false,
+            },
+          },
+          required: ["mermaidText", "center"],
+          additionalProperties: false,
+        },
+        execute: async (args) => {
+          const parsed = parseMermaidGraphArgs(args);
+          const built = buildMermaidElements(parsed.mermaidText, {
+            existingNodeIds: new Set(Object.keys(docRef.current.nodes)),
+            existingEdgeIds: new Set(Object.keys(docRef.current.edges)),
+            idPrefix: "",
+            animateIn: true,
+          });
+
+          if (built.nodeOrder.length === 0) {
+            throw new Error("No nodes were found in the Mermaid source.");
+          }
+
+          const centered = centerMermaidBuildResultOnPoint(built, {
+            x: parsed.centerX,
+            y: parsed.centerY,
+          });
+
+          const nextDoc = mergeMermaidBuildResultIntoDocument(docRef.current, centered);
+          docRef.current = nextDoc;
+          setDoc(nextDoc);
+          setSelection({ kind: "none" });
+
+          if (centered.animation) {
+            runNodeAnimation({
+              frameRef: toolAnimationFrameRef,
+              setDoc,
+              startPositions: collectNodeStartPositions(centered.nodes, centered.nodeOrder),
+              animation: centered.animation,
+            });
+          }
+
+          return JSON.stringify(
+            {
+              ok: true,
+              createdNodeIds: centered.nodeOrder,
+              createdEdgeIds: centered.edgeOrder,
+              bounds: centered.bounds,
+              center: { x: parsed.centerX, y: parsed.centerY },
             },
             null,
             2,

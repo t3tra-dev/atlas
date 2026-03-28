@@ -222,6 +222,19 @@ export function centerMermaidBuildResultOnCamera(
   );
 }
 
+export function centerMermaidBuildResultOnPoint(
+  result: MermaidBuildResult,
+  center: { x: number; y: number },
+) {
+  const bounds = result.bounds ?? computeBoundsFromNodes(result.nodes);
+  if (!bounds) return result;
+
+  const graphCenterX = (bounds.minX + bounds.maxX) / 2;
+  const graphCenterY = (bounds.minY + bounds.maxY) / 2;
+
+  return translateMermaidBuildResult(result, center.x - graphCenterX, center.y - graphCenterY);
+}
+
 export function sanitizeDocumentNameForFile(title: string) {
   const trimmed = title.trim();
   const base = trimmed || "document";

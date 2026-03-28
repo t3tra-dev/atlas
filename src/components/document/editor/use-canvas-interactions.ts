@@ -57,6 +57,15 @@ export function useCanvasInteractions({
 
       setSelection({ kind: "node", id: nodeId });
 
+      const childStartPositions: Record<string, { x: number; y: number }> | undefined =
+        node.type === "container"
+          ? Object.fromEntries(
+              Object.values(doc.nodes)
+                .filter((child) => child.props?.containerId === nodeId)
+                .map((child) => [child.id, { x: child.x, y: child.y }]),
+            )
+          : undefined;
+
       setDrag({
         kind: "move",
         nodeId,
@@ -65,6 +74,7 @@ export function useCanvasInteractions({
         startClientY: e.clientY,
         startX: node.x,
         startY: node.y,
+        childStartPositions,
       });
     },
     [doc.nodes, setDrag, setSelection],
@@ -142,6 +152,30 @@ export function useCanvasInteractions({
         setDoc((d) => {
           const node = d.nodes[drag.nodeId];
           if (!node) return d;
+          const childStarts = drag.childStartPositions;
+          if (childStarts) {
+            const nextNodes = { ...d.nodes };
+            nextNodes[drag.nodeId] = {
+              ...node,
+              x: drag.startX + dx,
+              y: drag.startY + dy,
+            };
+
+            for (const [childId, start] of Object.entries(childStarts)) {
+              const child = nextNodes[childId];
+              if (!child) continue;
+              nextNodes[childId] = {
+                ...child,
+                x: start.x + dx,
+                y: start.y + dy,
+              };
+            }
+
+            return {
+              ...d,
+              nodes: nextNodes,
+            };
+          }
           return {
             ...d,
             nodes: {
@@ -368,6 +402,7 @@ export function useCanvasInteractions({
     [
       beginPan,
       camera,
+      doc.nodes,
       getViewportElement,
       nodeRegistry,
       setDoc,
@@ -418,7 +453,7 @@ export function useCanvasInteractions({
         setSelection({ kind: "node", id: nodeId });
       }
     },
-    [doc.nodes, setConnectPreview, setDoc, setSelection, setTool, tool],
+    [doc.edges, doc.nodes, setConnectPreview, setDoc, setSelection, setTool, tool],
   );
 
   React.useEffect(() => {

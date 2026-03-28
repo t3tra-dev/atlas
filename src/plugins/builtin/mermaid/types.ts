@@ -30,6 +30,12 @@ export type FlowchartEdge = {
   label?: string;
 };
 
+export type FlowchartGroup = {
+  id: string;
+  title: string;
+  members: string[];
+};
+
 export type MindmapNode = {
   id: string;
   text: string;
@@ -103,6 +109,7 @@ export type FlowchartParseResult = {
   direction: MermaidDirection;
   nodes: FlowchartNode[];
   edges: FlowchartEdge[];
+  groups: FlowchartGroup[];
 };
 
 export type MindmapParseResult = {

@@ -3,6 +3,7 @@ export { parseMermaidFlowchart } from "./parser";
 export type {
   BuildMermaidOptions,
   FlowchartEdge,
+  FlowchartGroup,
   FlowchartNode,
   MermaidBuildResult,
   MermaidDirection,

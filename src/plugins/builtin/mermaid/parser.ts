@@ -2,6 +2,7 @@ import { BASIC_ARROW_TOKENS, ensureUniqueId } from "./shared";
 
 import type {
   FlowchartEdge,
+  FlowchartGroup,
   FlowchartNode,
   FlowchartParseResult,
   MermaidDirection,
@@ -205,9 +206,39 @@ function findArrowToken(line: string) {
   return best?.token ?? null;
 }
 
+function parseSubgraphHeader(raw: string, existing: Set<string>) {
+  const header = raw.trim();
+  if (!header) {
+    const fallbackId = ensureUniqueId("subgraph", existing);
+    return { id: fallbackId, title: "Subgraph" };
+  }
+
+  const explicit = header.match(/^(\S+)\s+(.+)$/);
+  if (explicit) {
+    const id = ensureUniqueId(explicit[1], existing);
+    return {
+      id,
+      title: normalizeLabel(stripQuotes(explicit[2])),
+    };
+  }
+
+  const parsed = parseNodeToken(header);
+  if (parsed) {
+    const id = ensureUniqueId(parsed.id, existing);
+    return { id, title: parsed.text };
+  }
+
+  const title = normalizeLabel(stripQuotes(header));
+  const id = ensureUniqueId(slugify(title), existing);
+  return { id, title };
+}
+
 export function parseMermaidFlowchart(source: string): FlowchartParseResult {
   const nodes = new Map<string, FlowchartNode>();
   const edges: FlowchartEdge[] = [];
+  const groups = new Map<string, FlowchartGroup>();
+  const groupIds = new Set<string>();
+  const groupStack: string[] = [];
   let direction: MermaidDirection = "TB";
 
   const lines = source.split(/\r?\n/);
@@ -221,7 +252,27 @@ export function parseMermaidFlowchart(source: string): FlowchartParseResult {
       continue;
     }
 
+    if (/^mindmap\b/i.test(trimmed)) {
+      direction = "TB";
+      continue;
+    }
+
     if (/^(classDef|class|style)\b/i.test(trimmed)) continue;
+
+    if (/^subgraph\b/i.test(trimmed)) {
+      const header = trimmed.replace(/^subgraph\b/i, "").trim();
+      const { id, title } = parseSubgraphHeader(header, groupIds);
+      if (!groups.has(id)) {
+        groups.set(id, { id, title, members: [] });
+      }
+      groupStack.push(id);
+      continue;
+    }
+
+    if (/^end\b/i.test(trimmed)) {
+      groupStack.pop();
+      continue;
+    }
 
     const inline = trimmed.split("%%")[0].trim();
     if (!inline) continue;
@@ -245,7 +296,17 @@ export function parseMermaidFlowchart(source: string): FlowchartParseResult {
     const token = findArrowToken(line);
     if (!token) {
       const node = parseNodeToken(line);
-      if (node) upsertNode(nodes, node);
+      if (node) {
+        upsertNode(nodes, node);
+        if (groupStack.length) {
+          for (const groupId of groupStack) {
+            const group = groups.get(groupId);
+            if (group && !group.members.includes(node.id)) {
+              group.members.push(node.id);
+            }
+          }
+        }
+      }
       continue;
     }
 
@@ -259,6 +320,19 @@ export function parseMermaidFlowchart(source: string): FlowchartParseResult {
 
     upsertNode(nodes, fromNode);
     upsertNode(nodes, toNode);
+
+    if (groupStack.length) {
+      for (const groupId of groupStack) {
+        const group = groups.get(groupId);
+        if (!group) continue;
+        if (!group.members.includes(fromNode.id)) {
+          group.members.push(fromNode.id);
+        }
+        if (!group.members.includes(toNode.id)) {
+          group.members.push(toNode.id);
+        }
+      }
+    }
 
     const hasStartArrow = token.startsWith("<");
     const hasEndArrow = token.endsWith(">");
@@ -298,7 +372,12 @@ export function parseMermaidFlowchart(source: string): FlowchartParseResult {
     }
   }
 
-  return { direction, nodes: Array.from(nodes.values()), edges };
+  return {
+    direction,
+    nodes: Array.from(nodes.values()),
+    edges,
+    groups: Array.from(groups.values()),
+  };
 }
 
 export function parseMermaidMindmap(source: string): MindmapParseResult {

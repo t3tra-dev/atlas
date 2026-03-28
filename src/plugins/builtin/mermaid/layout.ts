@@ -68,12 +68,13 @@ function createSemanticGroupLayout(
   nodesById: Map<string, FlowchartNode>,
   memberIds: string[],
   direction: MermaidDirection,
+  sizeById?: Map<string, { w: number; h: number }>,
 ) {
   const horizontal = isHorizontalDirection(direction);
   const placed = new Map<string, LayoutBox>();
   const sizes = memberIds.map((id) => {
     const node = nodesById.get(id)!;
-    return { id, ...estimateNodeSize(node.text, node.shape) };
+    return { id, ...(sizeById?.get(id) ?? estimateNodeSize(node.text, node.shape)) };
   });
 
   if (sizes.length === 0) {
@@ -121,6 +122,7 @@ function buildSemanticFlowchartGraph(
   nodes: Array<FlowchartNode>,
   edges: Array<FlowchartEdge>,
   direction: MermaidDirection,
+  sizeById?: Map<string, { w: number; h: number }>,
 ) {
   const nodeIds = nodes.map((node) => node.id);
   const nodeOrder = new Map(nodeIds.map((id, index) => [id, index]));
@@ -178,7 +180,7 @@ function buildSemanticFlowchartGraph(
 
   const nodeToGroup = new Map<string, string>();
   for (const entry of groupOrder) {
-    const layout = createSemanticGroupLayout(nodesById, entry.members, direction);
+    const layout = createSemanticGroupLayout(nodesById, entry.members, direction, sizeById);
     groups.set(entry.id, {
       id: entry.id,
       members: entry.members,
@@ -314,8 +316,11 @@ export function layoutFlowchart(
   nodes: Array<FlowchartNode>,
   edges: Array<FlowchartEdge>,
   direction: MermaidDirection,
+  options?: {
+    sizeById?: Map<string, { w: number; h: number }>;
+  },
 ): MermaidLayoutResult {
-  const semantic = buildSemanticFlowchartGraph(nodes, edges, direction);
+  const semantic = buildSemanticFlowchartGraph(nodes, edges, direction, options?.sizeById);
   const horizontal = isHorizontalDirection(direction);
   const sign = primaryDirectionSign(direction);
   const orderedNodeIds = nodes.map((node) => node.id);
@@ -421,7 +426,7 @@ export function layoutFlowchart(
     if (placed.has(nodeId)) continue;
     const node = nodesById.get(nodeId);
     if (!node) continue;
-    const size = estimateNodeSize(node.text, node.shape);
+    const size = options?.sizeById?.get(nodeId) ?? estimateNodeSize(node.text, node.shape);
     placed.set(nodeId, { x: 0, y: 0, w: size.w, h: size.h });
     order.push(nodeId);
   }
@@ -436,6 +441,57 @@ export function layoutFlowchart(
     placed: normalizedPlaced,
     order,
     initialPlaced,
+  };
+}
+
+export function layoutSubgraphForceAtlas2(
+  nodes: Array<FlowchartNode>,
+  edges: Array<FlowchartEdge>,
+  direction: MermaidDirection,
+  options?: {
+    sizeById?: Map<string, { w: number; h: number }>;
+    padding?: number;
+    scale?: number;
+  },
+): MermaidLayoutResult {
+  const order = nodes.map((node) => node.id);
+  const sizes = nodes.map((node) => {
+    const override = options?.sizeById?.get(node.id);
+    return {
+      id: node.id,
+      ...(override ?? estimateNodeSize(node.text, node.shape)),
+    };
+  });
+  const maxW = Math.max(1, ...sizes.map((size) => size.w));
+  const maxH = Math.max(1, ...sizes.map((size) => size.h));
+  const gapX = 80;
+  const gapY = 60;
+  const columns = Math.max(1, Math.ceil(Math.sqrt(sizes.length)));
+  const seedPlaced = new Map<string, LayoutBox>();
+  sizes.forEach((size, index) => {
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    seedPlaced.set(size.id, {
+      x: col * (maxW + gapX) + (maxW - size.w) / 2,
+      y: row * (maxH + gapY) + (maxH - size.h) / 2,
+      w: size.w,
+      h: size.h,
+    });
+  });
+  const centeredSeed = centerPlacedAroundOrigin(seedPlaced);
+  const forceEdges = edges.map((edge) => ({
+    from: edge.from,
+    to: edge.to,
+    weight: edge.width >= 3 ? 1.3 : 1,
+  }));
+  const placed = runForceAtlas2OnPlaced(centeredSeed, direction, forceEdges);
+  const scaled = scalePlacedAroundCenter(placed, options?.scale ?? FORCE_ATLAS2_LAYOUT_SCALE);
+  const normalized = normalizePlaced(scaled, options?.padding ?? FORCE_ATLAS2_PADDING);
+
+  return {
+    placed: normalized,
+    order,
+    initialPlaced: normalized,
   };
 }
 
