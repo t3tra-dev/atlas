@@ -876,6 +876,35 @@ function upsertThread(
   };
 }
 
+function appendMessagesToThread(
+  state: ChatHistoryState,
+  threadId: string,
+  messages: Array<ChatMessage>,
+  opts?: {
+    title?: string;
+    createdAt?: number;
+    updatedAt?: number;
+    activeThreadId?: string;
+  },
+): ChatHistoryState {
+  const currentThread = state.threads.find((thread) => thread.id === threadId);
+  const fallbackThread = createEmptyThread(opts?.title);
+  const baseThread = currentThread ?? fallbackThread;
+
+  return upsertThread(
+    state,
+    {
+      ...baseThread,
+      id: threadId,
+      title: opts?.title ?? baseThread.title,
+      createdAt: opts?.createdAt ?? currentThread?.createdAt ?? fallbackThread.createdAt,
+      updatedAt: opts?.updatedAt ?? Date.now(),
+      messages: [...(currentThread?.messages ?? baseThread.messages), ...messages],
+    },
+    opts?.activeThreadId ?? state.activeThreadId,
+  );
+}
+
 function formatThreadPreview(thread: ChatThread) {
   const lastMessage = [...thread.messages]
     .reverse()
@@ -1480,6 +1509,8 @@ export function ChatSidePanel({
 
     try {
       const llmMessages: Array<LLMMessage> = nextMessages.map(chatMessageToLLMMessage);
+      const resolvedTitle =
+        currentTitle === EMPTY_THREAD_TITLE ? summarizeThread(nextMessages) : currentTitle;
 
       const result = await runLLMSession({
         provider: savedConfig.provider,
@@ -1488,48 +1519,26 @@ export function ChatSidePanel({
         systemPrompt: ATLAS_CHAT_SYSTEM_PROMPT,
         messages: llmMessages,
         tools: llmTools,
+        onMessage: async (message) => {
+          const chatMessages = llmMessageToChatMessages(message);
+          if (!chatMessages.length) return;
+
+          setChatHistory((current) =>
+            appendMessagesToThread(current, threadId, chatMessages, {
+              title: resolvedTitle,
+              createdAt: activeThread?.createdAt ?? now,
+              updatedAt: Date.now(),
+              activeThreadId: threadId,
+            }),
+          );
+        },
       });
 
       const assistantContent = result.assistantMessage.content.trim();
       if (!assistantContent) {
         throw new Error("LLM returned an empty response.");
       }
-
-      const appendedMessages = result.transcript
-        .slice(llmMessages.length)
-        .flatMap(llmMessageToChatMessages);
-
-      setChatHistory((current) =>
-        upsertThread(
-          current,
-          {
-            ...(current.threads.find((thread) => thread.id === threadId) ?? createEmptyThread()),
-            id: threadId,
-            title:
-              currentTitle === EMPTY_THREAD_TITLE ? summarizeThread(nextMessages) : currentTitle,
-            createdAt: activeThread?.createdAt ?? now,
-            updatedAt: Date.now(),
-            messages: [
-              ...(current.threads.find((thread) => thread.id === threadId)?.messages ?? []),
-              ...appendedMessages,
-            ],
-          },
-          current.activeThreadId,
-        ),
-      );
     } catch (caughtError) {
-      setChatHistory((current) =>
-        upsertThread(
-          current,
-          {
-            ...(current.threads.find((thread) => thread.id === threadId) ?? createEmptyThread()),
-            id: threadId,
-            updatedAt: Date.now(),
-            messages: current.threads.find((thread) => thread.id === threadId)?.messages ?? [],
-          },
-          current.activeThreadId,
-        ),
-      );
       setError(caughtError instanceof Error ? caughtError.message : "LLM request failed.");
     } finally {
       setIsSubmitting(false);

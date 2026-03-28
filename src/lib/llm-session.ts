@@ -56,6 +56,7 @@ export async function runLLMSession({
   messages,
   tools,
   maxTurns = 6,
+  onMessage,
 }: {
   provider: LLMTurnRequest["provider"];
   model: string;
@@ -64,6 +65,7 @@ export async function runLLMSession({
   messages: Array<LLMMessage>;
   tools?: Array<LocalLLMTool>;
   maxTurns?: number;
+  onMessage?: (message: LLMMessage) => void | Promise<void>;
 }): Promise<{ assistantMessage: LLMAssistantTextMessage; transcript: Array<LLMMessage> }> {
   const availableTools = tools ?? [];
   const toolMap = new Map(availableTools.map((tool) => [tool.name, tool]));
@@ -83,6 +85,7 @@ export async function runLLMSession({
     if (!isToolCallOutput(response.output)) {
       const assistantMessage = response.output.message;
       transcript = [...transcript, assistantMessage];
+      await onMessage?.(assistantMessage);
       return { assistantMessage, transcript };
     }
 
@@ -90,45 +93,47 @@ export async function runLLMSession({
       throw new Error("LLM requested an empty tool call set.");
     }
 
-    transcript = [
-      ...transcript,
-      {
-        role: "assistant",
-        content: "",
-        toolCalls: response.output.toolCalls,
-      },
-    ];
+    const assistantToolCallMessage: Extract<
+      LLMMessage,
+      { role: "assistant"; toolCalls: Array<LLMToolCall> }
+    > = {
+      role: "assistant",
+      content: "",
+      toolCalls: response.output.toolCalls,
+    };
+    transcript = [...transcript, assistantToolCallMessage];
+    await onMessage?.(assistantToolCallMessage);
 
-    const toolResults = await Promise.all(
-      response.output.toolCalls.map(async (toolCall) => {
-        const tool = toolMap.get(toolCall.name);
-        if (!tool) {
-          return {
-            role: "tool" as const,
-            toolCallId: toolCall.id,
-            name: toolCall.name,
-            content: JSON.stringify(
-              {
-                ok: false,
-                error: `Unknown tool '${toolCall.name}'.`,
-              },
-              null,
-              2,
-            ),
-          };
-        }
+    for (const toolCall of response.output.toolCalls) {
+      const tool = toolMap.get(toolCall.name);
+      let toolResult: Extract<LLMMessage, { role: "tool" }>;
 
+      if (!tool) {
+        toolResult = {
+          role: "tool",
+          toolCallId: toolCall.id,
+          name: toolCall.name,
+          content: JSON.stringify(
+            {
+              ok: false,
+              error: `Unknown tool '${toolCall.name}'.`,
+            },
+            null,
+            2,
+          ),
+        };
+      } else {
         try {
           const output = await tool.execute(parseToolArguments(toolCall));
-          return {
-            role: "tool" as const,
+          toolResult = {
+            role: "tool",
             toolCallId: toolCall.id,
             name: toolCall.name,
             content: output,
           };
         } catch (error) {
-          return {
-            role: "tool" as const,
+          toolResult = {
+            role: "tool",
             toolCallId: toolCall.id,
             name: toolCall.name,
             content: JSON.stringify(
@@ -141,10 +146,11 @@ export async function runLLMSession({
             ),
           };
         }
-      }),
-    );
+      }
 
-    transcript = [...transcript, ...toolResults];
+      transcript = [...transcript, toolResult];
+      await onMessage?.(toolResult);
+    }
   }
 
   throw new Error("LLM exceeded the tool call limit.");
