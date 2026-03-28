@@ -19,6 +19,8 @@ import {
   CameraIcon,
   CameraOffIcon,
   FlipHorizontalIcon,
+  MicIcon,
+  MicOffIcon,
   MonitorIcon,
   MoonIcon,
   SunIcon,
@@ -41,6 +43,14 @@ export default function Layout({ children }: { children?: ReactNode }) {
   });
   const [cameraPermission, setCameraPermission] = React.useState<CameraPermissionState>("unknown");
   const permissionInitRef = React.useRef(false);
+  type MicPermissionState = "granted" | "denied" | "prompt" | "unknown";
+  const [micEnabled, setMicEnabled] = React.useState(() => {
+    if (typeof window === "undefined") return false;
+    const stored = window.localStorage.getItem("atlas.mic.enabled");
+    return stored === "true";
+  });
+  const [micPermission, setMicPermission] = React.useState<MicPermissionState>("unknown");
+  const micPermissionInitRef = React.useRef(false);
   const themeIcon =
     theme === "dark" ? (
       <MoonIcon className="size-4" />
@@ -86,14 +96,77 @@ export default function Layout({ children }: { children?: ReactNode }) {
   }, []);
 
   React.useEffect(() => {
+    if (!navigator.permissions?.query) {
+      setMicPermission("unknown");
+      return;
+    }
+
+    let active = true;
+    let status: PermissionStatus | null = null;
+
+    const applyPermission = (state: MicPermissionState) => {
+      if (!active) return;
+      setMicPermission(state);
+      if (!micPermissionInitRef.current && state === "granted") {
+        micPermissionInitRef.current = true;
+        setMicEnabled(true);
+      }
+    };
+
+    navigator.permissions
+      .query({ name: "microphone" as PermissionName })
+      .then((result) => {
+        status = result;
+        applyPermission(result.state);
+        result.onchange = () => applyPermission(result.state);
+      })
+      .catch(() => {
+        applyPermission("unknown");
+      });
+
+    return () => {
+      active = false;
+      if (status) status.onchange = null;
+    };
+  }, []);
+
+  React.useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("atlas.camera.enabled", String(cameraEnabled));
   }, [cameraEnabled]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
+    window.localStorage.setItem("atlas.mic.enabled", String(micEnabled));
+  }, [micEnabled]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
     window.localStorage.setItem("atlas.camera.mirrored", String(cameraMirrored));
   }, [cameraMirrored]);
+
+  React.useEffect(() => {
+    if (!micEnabled) return;
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    let active = true;
+
+    navigator.mediaDevices
+      .getUserMedia({ audio: true, video: false })
+      .then((stream) => {
+        if (!active) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        stream.getTracks().forEach((track) => track.stop());
+      })
+      .catch(() => {
+        // Permission denied or unavailable.
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [micEnabled]);
 
   return (
     <div className="min-h-svh flex flex-col">
@@ -107,6 +180,34 @@ export default function Layout({ children }: { children?: ReactNode }) {
                 <SidebarTrigger className="md:hidden" />
                 <div className="text-sm font-semibold">Atlas</div>
                 <div className="ml-auto flex items-center gap-1">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={micPermission === "denied" ? "マイク権限が必要" : "マイク設定"}
+                      >
+                        {micEnabled ? (
+                          <MicIcon className="size-4" />
+                        ) : (
+                          <MicOffIcon className="size-4" />
+                        )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Microphone</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuCheckboxItem
+                        checked={micEnabled}
+                        onCheckedChange={(checked) => {
+                          setMicEnabled(Boolean(checked));
+                        }}
+                      >
+                        <MicIcon className="size-4" />
+                        {micPermission === "denied" ? "Microphone (Blocked)" : "Microphone"}
+                      </DropdownMenuCheckboxItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button

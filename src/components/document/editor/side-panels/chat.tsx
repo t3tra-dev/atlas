@@ -47,6 +47,7 @@ import {
 import { centerMermaidBuildResultOnPoint } from "@/components/document/editor/shared";
 import type { MermaidDirection } from "@/plugins/builtin/mermaid/types";
 import type { EdgeShape } from "@/components/document/model";
+import { subscribeVoiceInputToggle } from "@/plugins/builtin/gestures/voice-input-toggle-bus";
 import {
   BotIcon,
   ChevronLeftIcon,
@@ -1306,11 +1307,18 @@ export function ChatSidePanel({
   const [isTranscribing, setIsTranscribing] = React.useState(false);
   const [transcriptionError, setTranscriptionError] = React.useState<string | null>(null);
   const [isTranscriptionSupported, setIsTranscriptionSupported] = React.useState(true);
+  const [micEnabled, setMicEnabled] = React.useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("atlas.mic.enabled") === "true";
+  });
   const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
   const mediaStreamRef = React.useRef<MediaStream | null>(null);
   const transcribeSocketRef = React.useRef<WebSocket | null>(null);
   const recordedChunksRef = React.useRef<Blob[]>([]);
   const lastTranscriptRef = React.useRef<string | null>(null);
+  const sendAfterStopRef = React.useRef(false);
+  const autoSendContentRef = React.useRef<string | null>(null);
+  const [autoSendPending, setAutoSendPending] = React.useState(false);
   const visibleChatHistory =
     chatHistoryDocId === normalizedActiveDocId ? chatHistory : normalizeChatHistory(null);
   const activeThread = React.useMemo(
@@ -1332,6 +1340,19 @@ export function ChatSidePanel({
     const supported =
       "MediaRecorder" in window && typeof navigator?.mediaDevices?.getUserMedia === "function";
     setIsTranscriptionSupported(supported);
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const update = () => {
+      setMicEnabled(window.localStorage.getItem("atlas.mic.enabled") === "true");
+    };
+
+    update();
+    window.addEventListener("storage", update);
+    return () => {
+      window.removeEventListener("storage", update);
+    };
   }, []);
 
   React.useEffect(() => {
@@ -1360,11 +1381,23 @@ export function ChatSidePanel({
         const pattern = new RegExp(`${escaped}$`);
         const next = current.replace(pattern, nextSegment);
         lastTranscriptRef.current = nextSegment;
-        return next === current ? `${current}${spacer}${nextSegment}` : next;
+        const resolved = next === current ? `${current}${spacer}${nextSegment}` : next;
+        if (sendAfterStopRef.current) {
+          autoSendContentRef.current = resolved;
+          setAutoSendPending(true);
+          sendAfterStopRef.current = false;
+        }
+        return resolved;
       }
 
       lastTranscriptRef.current = nextSegment;
-      return current ? `${current}${spacer}${nextSegment}` : nextSegment;
+      const resolved = current ? `${current}${spacer}${nextSegment}` : nextSegment;
+      if (sendAfterStopRef.current) {
+        autoSendContentRef.current = resolved;
+        setAutoSendPending(true);
+        sendAfterStopRef.current = false;
+      }
+      return resolved;
     });
   }, []);
 
@@ -1383,29 +1416,39 @@ export function ChatSidePanel({
       });
   }, []);
 
-  const stopTranscription = React.useCallback(() => {
+  const stopTranscription = React.useCallback((options?: { reason?: "gesture" | "manual" }) => {
+    const reason = options?.reason ?? "manual";
+    const shouldAutoSend = reason === "gesture";
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
     }
     mediaRecorderRef.current = null;
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
-    lastTranscriptRef.current = null;
-    recordedChunksRef.current = [];
-    if (transcribeSocketRef.current) {
+    if (!shouldAutoSend) {
+      lastTranscriptRef.current = null;
+      recordedChunksRef.current = [];
+    }
+    if (shouldAutoSend) {
+      sendAfterStopRef.current = true;
+    } else if (transcribeSocketRef.current) {
       try {
         transcribeSocketRef.current.close();
       } catch {
         // ignore
       }
+      transcribeSocketRef.current = null;
     }
-    transcribeSocketRef.current = null;
     setIsTranscribing(false);
   }, []);
 
   const startTranscription = React.useCallback(async () => {
     if (isTranscribing) return;
     if (typeof navigator === "undefined") return;
+    if (!micEnabled) {
+      setTranscriptionError("マイクがオフになっています。");
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       setTranscriptionError("このブラウザは音声入力に対応していません。");
       return;
@@ -1428,7 +1471,7 @@ export function ChatSidePanel({
           };
           if (payload.error) {
             setTranscriptionError(payload.error);
-            stopTranscription();
+            stopTranscription({ reason: "manual" });
             return;
           }
           if (payload.transcript) {
@@ -1441,13 +1484,13 @@ export function ChatSidePanel({
 
       socket.onerror = () => {
         setTranscriptionError("音声入力サーバーとの接続に失敗しました。");
-        stopTranscription();
+        stopTranscription({ reason: "manual" });
       };
 
       socket.onclose = () => {
         if (isTranscribing) {
           setTranscriptionError("音声入力サーバーとの接続が切断されました。");
-          stopTranscription();
+          stopTranscription({ reason: "manual" });
         }
       };
 
@@ -1512,13 +1555,13 @@ export function ChatSidePanel({
       setTranscriptionError(
         caughtError instanceof Error ? caughtError.message : "マイクの使用に失敗しました。",
       );
-      stopTranscription();
+      stopTranscription({ reason: "manual" });
     }
-  }, [isTranscribing, replaceTranscript, sendChunkToSocket, stopTranscription]);
+  }, [isTranscribing, micEnabled, replaceTranscript, sendChunkToSocket, stopTranscription]);
 
   const toggleTranscription = React.useCallback(() => {
     if (isTranscribing) {
-      stopTranscription();
+      stopTranscription({ reason: "manual" });
     } else {
       void startTranscription();
     }
@@ -1526,9 +1569,31 @@ export function ChatSidePanel({
 
   React.useEffect(() => {
     return () => {
-      stopTranscription();
+      stopTranscription({ reason: "manual" });
     };
   }, [stopTranscription]);
+
+  React.useEffect(() => {
+    const unsubscribe = subscribeVoiceInputToggle((event) => {
+      if (event.source !== "gesture") return;
+      if (!isTranscriptionSupported || !micEnabled) return;
+      if (isTranscribing) {
+        stopTranscription({ reason: "gesture" });
+      } else {
+        void startTranscription();
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [isTranscribing, isTranscriptionSupported, micEnabled, startTranscription, stopTranscription]);
+
+  React.useEffect(() => {
+    if (!micEnabled && isTranscribing) {
+      stopTranscription({ reason: "manual" });
+    }
+  }, [isTranscribing, micEnabled, stopTranscription]);
 
   const llmTools = React.useMemo<Array<LocalLLMTool>>(
     () => [
@@ -1903,7 +1968,7 @@ export function ChatSidePanel({
 
   React.useEffect(() => {
     if (!isActive && isTranscribing) {
-      stopTranscription();
+      stopTranscription({ reason: "manual" });
     }
   }, [isActive, isTranscribing, stopTranscription]);
 
@@ -1990,81 +2055,115 @@ export function ChatSidePanel({
     [isSubmitting],
   );
 
-  const sendMessage = React.useCallback(async () => {
-    if (!hasCompleteLLMConfig(savedConfig)) {
-      setError("設定を保存してください。");
+  const sendMessage = React.useCallback(
+    async (overrideContent?: string) => {
+      if (!hasCompleteLLMConfig(savedConfig)) {
+        setError("設定を保存してください。");
+        return;
+      }
+
+      const content = (overrideContent ?? draft).trim();
+      if (!content || isSubmitting) return;
+
+      const threadId = activeThread?.id ?? createThreadId();
+      const now = Date.now();
+      const currentMessages = activeThread?.messages ?? [];
+      const currentTitle = activeThread?.title ?? EMPTY_THREAD_TITLE;
+
+      const userMessage: ChatUserMessage = {
+        id: createMessageId(),
+        role: "user",
+        content,
+      };
+      const nextMessages = [...currentMessages, userMessage];
+
+      setChatHistory((current) =>
+        upsertThread(
+          current,
+          {
+            id: threadId,
+            title:
+              currentTitle === EMPTY_THREAD_TITLE ? summarizeThread(nextMessages) : currentTitle,
+            messages: nextMessages,
+            createdAt: activeThread?.createdAt ?? now,
+            updatedAt: now,
+          },
+          threadId,
+        ),
+      );
+      setDraft("");
+      setError(null);
+      setIsSubmitting(true);
+
+      try {
+        const llmMessages: Array<LLMMessage> = nextMessages.map(chatMessageToLLMMessage);
+        const resolvedTitle =
+          currentTitle === EMPTY_THREAD_TITLE ? summarizeThread(nextMessages) : currentTitle;
+
+        const result = await runLLMSession({
+          provider: savedConfig.provider,
+          model: savedConfig.model,
+          token: savedConfig.token,
+          systemPrompt: ATLAS_CHAT_SYSTEM_PROMPT,
+          messages: llmMessages,
+          tools: llmTools,
+          onMessage: async (message) => {
+            const chatMessages = llmMessageToChatMessages(message);
+            if (!chatMessages.length) return;
+
+            setChatHistory((current) =>
+              appendMessagesToThread(current, threadId, chatMessages, {
+                title: resolvedTitle,
+                createdAt: activeThread?.createdAt ?? now,
+                updatedAt: Date.now(),
+                activeThreadId: threadId,
+              }),
+            );
+          },
+        });
+
+        const assistantContent = result.assistantMessage.content.trim();
+        if (!assistantContent) {
+          throw new Error("LLM returned an empty response.");
+        }
+      } catch (caughtError) {
+        setError(caughtError instanceof Error ? caughtError.message : "LLM request failed.");
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [activeThread, draft, isSubmitting, llmTools, savedConfig],
+  );
+
+  React.useEffect(() => {
+    if (!autoSendPending) return;
+    const content = autoSendContentRef.current;
+    autoSendContentRef.current = null;
+
+    const finalize = () => {
+      if (transcribeSocketRef.current) {
+        try {
+          transcribeSocketRef.current.close();
+        } catch {
+          // ignore
+        }
+      }
+      transcribeSocketRef.current = null;
+      lastTranscriptRef.current = null;
+      recordedChunksRef.current = [];
+      setAutoSendPending(false);
+    };
+
+    if (!content) {
+      finalize();
       return;
     }
 
-    const content = draft.trim();
-    if (!content || isSubmitting) return;
-
-    const threadId = activeThread?.id ?? createThreadId();
-    const now = Date.now();
-    const currentMessages = activeThread?.messages ?? [];
-    const currentTitle = activeThread?.title ?? EMPTY_THREAD_TITLE;
-
-    const userMessage: ChatUserMessage = {
-      id: createMessageId(),
-      role: "user",
-      content,
-    };
-    const nextMessages = [...currentMessages, userMessage];
-
-    setChatHistory((current) =>
-      upsertThread(
-        current,
-        {
-          id: threadId,
-          title: currentTitle === EMPTY_THREAD_TITLE ? summarizeThread(nextMessages) : currentTitle,
-          messages: nextMessages,
-          createdAt: activeThread?.createdAt ?? now,
-          updatedAt: now,
-        },
-        threadId,
-      ),
-    );
-    setDraft("");
-    setError(null);
-    setIsSubmitting(true);
-
-    try {
-      const llmMessages: Array<LLMMessage> = nextMessages.map(chatMessageToLLMMessage);
-      const resolvedTitle =
-        currentTitle === EMPTY_THREAD_TITLE ? summarizeThread(nextMessages) : currentTitle;
-
-      const result = await runLLMSession({
-        provider: savedConfig.provider,
-        model: savedConfig.model,
-        token: savedConfig.token,
-        systemPrompt: ATLAS_CHAT_SYSTEM_PROMPT,
-        messages: llmMessages,
-        tools: llmTools,
-        onMessage: async (message) => {
-          const chatMessages = llmMessageToChatMessages(message);
-          if (!chatMessages.length) return;
-
-          setChatHistory((current) =>
-            appendMessagesToThread(current, threadId, chatMessages, {
-              title: resolvedTitle,
-              createdAt: activeThread?.createdAt ?? now,
-              updatedAt: Date.now(),
-              activeThreadId: threadId,
-            }),
-          );
-        },
-      });
-
-      const assistantContent = result.assistantMessage.content.trim();
-      if (!assistantContent) {
-        throw new Error("LLM returned an empty response.");
-      }
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : "LLM request failed.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [activeThread, draft, isSubmitting, llmTools, savedConfig]);
+    void (async () => {
+      await sendMessage(content);
+      finalize();
+    })();
+  }, [autoSendPending, sendMessage]);
 
   const onDraftKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2269,7 +2368,7 @@ export function ChatSidePanel({
               size="xs"
               variant={isTranscribing ? "default" : "outline"}
               onClick={toggleTranscription}
-              disabled={!isTranscriptionSupported || isSubmitting}
+              disabled={!isTranscriptionSupported || !micEnabled || isSubmitting}
             >
               {isTranscribing ? (
                 <SquareIcon className="size-3.5" />

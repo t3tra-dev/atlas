@@ -528,8 +528,7 @@ app.post("/api/transcribe", async (c) => {
             punctuate: true,
             smart_format: true,
         }, { returnRawResponse: false });
-        const transcript = response
-            ?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
+        const transcript = response?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
         return c.json({ transcript });
     }
     catch (error) {
@@ -583,8 +582,7 @@ app.get("/api/transcribe/ws", (c) => {
                 punctuate: true,
                 smart_format: true,
             }, { returnRawResponse: false });
-            const transcript = response
-                ?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
+            const transcript = response?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
             if (transcript) {
                 sendPayload({ transcript, isPartial: false });
             }
